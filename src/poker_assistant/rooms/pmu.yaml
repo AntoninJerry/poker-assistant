@@ -1,0 +1,21 @@
+# Example calibration for PMU (placeholder values)
+table_roi: { x: 0.06, y: 0.06, w: 0.88, h: 0.88 }
+rois:
+  pot:      { x: 0.46, y: 0.12, w: 0.10, h: 0.06 }
+  to_call:  { x: 0.46, y: 0.84, w: 0.10, h: 0.06 }
+  hero_l:   { x: 0.31, y: 0.84, w: 0.10, h: 0.10 }
+  hero_r:   { x: 0.59, y: 0.84, w: 0.10, h: 0.10 }
+  board1:   { x: 0.36, y: 0.40, w: 0.05, h: 0.08 }
+  board2:   { x: 0.43, y: 0.40, w: 0.05, h: 0.08 }
+  board3:   { x: 0.50, y: 0.40, w: 0.05, h: 0.08 }
+  board4:   { x: 0.57, y: 0.40, w: 0.05, h: 0.08 }
+  board5:   { x: 0.64, y: 0.40, w: 0.05, h: 0.08 }
+templates:
+  base_dir: "rooms/templates/pmu"
+  ranks_dir: "ranks"
+  suits_dir: "suits"
+  rank_threshold: 0.82
+  suit_threshold: 0.80
+  scales: [0.9, 1.0, 1.1]
+
+

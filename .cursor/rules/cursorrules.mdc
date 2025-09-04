@@ -1,0 +1,133 @@
+---
+description: "Règles projet — Assistant IA Poker (OCR + Ollama) : style, sécurité, architecture, UI"
+globs:
+  - "**/*.py"
+  - "**/*.yml"
+  - "docs/**"
+alwaysApply: true
+---
+
+You are an expert Python developer specializing in poker applications with OCR and local AI. You have deep expertise in EasyOCR, OpenCV, Ollama, CustomTkinter, and gaming security best practices.
+
+# PROJET: Assistant IA Poker en Local
+
+## Mission
+Créer un assistant stratégique poker qui lit **uniquement** la fenêtre table via OCR, analyse localement avec **Ollama (Llama3.1:8b)** et recommande des actions optimales, en respectant strictement la conformité gaming (lecture seule, pas d’automation).
+
+## Tech Stack
+- Python 3.12+, Windows 11 (Linux minimal support)
+- OCR: EasyOCR + OpenCV + mss (capture)
+- IA: Ollama + Llama3.1:8b (local)
+- UI: CustomTkinter (overlay non intrusif)
+- Config: YAML (rooms), dotenv
+- DB (optionnel): SQLite local
+- Tests: pytest (+ pytest-asyncio)
+
+## Architecture Modulaire
+src/poker_assistant/
+├── app.py                          # Point d'entrée principal
+├── config.py                       # Configuration centralisée
+├── security/
+│   └── guard.py                    # Sécurité et conformité
+├── windows/
+│   ├── detector.py                 # Détection tables poker (pywinctl)
+│   └── signatures/                 # Templates par room
+├── ocr/
+│   ├── capture.py                  # Capture d'écran (mss)
+│   ├── readers.py                  # EasyOCR integration
+│   ├── parsers.py                  # Parse données poker
+│   └── calibrate_gui.py            # GUI calibration
+├── rooms/
+│   ├── winamax.yaml               # Config Winamax
+│   ├── pmu.yaml                   # Config PMU
+│   └── templates/                 # Assets visuels
+├── strategy/
+│   ├── features.py                # Extraction features
+│   ├── ev_math.py                 # Calculs EV, cotes
+│   ├── profiles.py                # Profils joueurs
+│   ├── engine.py                  # Moteur décisionnel
+│   └── providers/
+│       ├── base.py                # Interface abstraite
+│       ├── ollama_.py             # Client Ollama local
+│       └── rules_.py              # Fallback heuristique
+├── ui/
+│   ├── overlay.py                 # Interface overlay
+│   ├── voice.py                   # TTS recommandations
+│   └── room_selector.py           # Sélecteur de room
+└── telemetry/
+    ├── logging.py                 # Logs structurés
+    └── storage.py                 # Persistence données
+
+
+## Exigences FONCTIONNELLES (CDC)
+- **Détection auto de la fenêtre table** (Winamax, PMU, autre) :
+  - `select_best_poker_window()` : score titres/classes (`winamax|pmu|poker`) + heuristique visuelle “felt/table”.
+  - **Exclure lobby/home** (mots-clés: lobby, home, accueil, shop/boutique/caisse) et UIs très textuelles.
+  - Gérer **plein écran** et **fenêtré**, **DPI scaling**.
+- **Lecture temps réel uniquement** sur **cette** fenêtre (rect client exact).
+- **ROIs** : détection `table_roi` + ROIs relatifs (pot, to_call, hero_left/right, board1..5). Calibrage par **rooms/*.yml**.
+- **OCR priorisé** : pot → to_call → hero cards → board (si street≥flop).
+- **Policy (Ollama)** : réponse **JSON strict** `{action, size_bb, reason_short, confidence}`.
+- **UI** : overlay discret (coin fenêtre table), topmost, draggable, lock/unlock, jamais au centre.
+
+## Code Standards — ALWAYS FOLLOW
+### Python Style (Mandatory)
+- Type hints **sur tout** ; docstrings **Google-style**.
+- Format: **Black** (line-length=88) + **Ruff** + **isort** ; **mypy** sur `src`.
+- Erreurs gérées via exceptions custom (`WindowError`, `OCRReadError`, `PolicyError`).
+- Pas de globals ; fonctions pures & dataclasses/pydantic quand pertinent.
+- IO réseau **uniquement** vers Ollama local.
+
+### Security Rules (CRITICAL)
+- **NEVER** inject into poker process memory
+- **NEVER** automate clicks/keyboard (manual-only)
+- **ONLY** read screen (mss); **NO** access to poker files/processes
+- Randomize OCR timing (**jitter 200–500 ms**, configurable)
+- Logging **disable-able** ; pas de logs sensibles
+
+### Performance Targets
+- OCR par ROI principal < **200 ms** (hors premier chargement)
+- Boucle temps réel (avec diff-only) **200–500 ms**
+- Policy (Ollama) **< 1.2 s** (timeout + retries)
+- CPU moyen < **15%**, RAM < **500 MB**
+
+## Détection Fenêtre & Screenshot (règles)
+- `pywin32` (Windows) / backend Linux minimal (X11/wmctrl fallback).
+- `get_window_rect()` doit renvoyer **client rect** (DWM frames exclus).
+- `mss` pour `grab_rect(rect)` ; proscrire `ImageGrab` (moins robuste).
+- **Diff-only** : hash basse résolution par ROI pour éviter OCR inutile.
+- **Plein écran**: ROI table détecté **dans** le rect ; **Fenêtré**: capture **exacte** du client.
+
+## Rooms & Templates
+- `config/rooms/<room>.yml` :
+  - `table_roi` + `rois` relatifs (pot, to_call, hero, board1..5)
+  - `templates` : `base_dir`, `ranks_dir`, `suits_dir`, `rank_threshold`, `suit_threshold`, `scales`
+- Arborescence templates :
+- Rangs : `rank_A.png`, `rank_K.png`, …, `rank_T.png`, `rank_9.png` … `rank_2.png`
+- Couleurs : `suit_s.png`, `suit_h.png`, `suit_d.png`, `suit_c.png`
+- PNG **transparents**, centrés, 24–40 px, variantes `@2x` optionnelles.
+- Matching : `cv2.matchTemplate` **multi-échelles** (`TM_CCOEFF_NORMED`), fallback EasyOCR si score < threshold.
+
+## Policy / LLM — JSON STRICT ONLY
+- **System prompt** : “Return **strict JSON only** with keys: action (fold|call|raise), size_bb (float|null), reason_short (string), confidence (0..1). No prose.”
+- **Validation** : pydantic `PolicyResponse` ; fallback parsing (regex → json.loads → re-validate).  
+- En cas d’échec : `PolicyError` loggée, **la boucle continue** (dernier conseil marqué **stale**).
+
+## UI Overlay (CustomTkinter)
+- **Non intrusif** : coin fenêtre table, **jamais** au centre ; taille compacte.
+- **Topmost**, **borderless**, **draggable**, bouton **close**, **lock/unlock** position.
+- `update_position(window_rect)` pour suivre la table (plein écran/fenêtré).
+- Affiche : **Hero cards**, **Pot**, **To Call**, **Action + Confiance** (codes couleurs), **raison courte**.
+- Mode debug : **métriques** (FPS, loop ms, OCR ms/ROI, %template hits).
+
+## Exemple (snippets) — indicatifs, pas normatifs
+### Capture avec mss (Windows/Linux)
+```python
+import mss, numpy as np
+
+def grab_rect(rect) -> np.ndarray:
+  with mss.mss() as sct:
+      x,y,w,h = rect.x, rect.y, rect.w, rect.h
+      mon = {"left": x, "top": y, "width": w, "height": h}
+      raw = sct.grab(mon)
+      return np.array(raw)[:, :, :3]  # BGR/RGB selon ton pipeline
