@@ -2,7 +2,7 @@
 
 import logging
 
-from ..config import AppConfig, load_config
+from ..config import AppSettings
 
 _LOGGER: logging.Logger | None = None
 
@@ -12,8 +12,8 @@ def get_logger() -> logging.Logger:
     if _LOGGER is not None:
         return _LOGGER
 
-    config: AppConfig = load_config()
-    level = getattr(logging, config.logging.level, logging.INFO)
+    config = AppSettings()
+    level = logging.INFO  # Default level for now
 
     logger = logging.getLogger("poker_assistant")
     logger.setLevel(level)

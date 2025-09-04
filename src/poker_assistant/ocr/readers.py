@@ -14,7 +14,7 @@ import easyocr  # type: ignore[import-untyped]
 import numpy as np
 import numpy.typing as npt
 
-from ..config import AppConfig
+from ..config import AppSettings
 from .parsers import GameState, ParsedAmounts
 
 
@@ -51,7 +51,7 @@ class OCRReader:
         texts = [t[1] for t in result]
         return " ".join(texts)
 
-    def read_state(self, frame_rgb: npt.NDArray[np.uint8], config: AppConfig) -> GameState:
+    def read_state(self, frame_rgb: npt.NDArray[np.uint8], config: AppSettings) -> GameState:
         # Placeholder ROIs; will be driven by YAML in next iterations
         h, w, _ = frame_rgb.shape
         roi_pot = ROI(

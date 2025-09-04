@@ -8,7 +8,7 @@ constraints: read-only screen access and no automation.
 from dataclasses import dataclass
 from time import perf_counter, sleep
 
-from .config import AppConfig, load_config
+from .config import AppSettings
 from .ocr.capture import GrabRect, grab_rect
 from .ocr.parsers import GameState
 from .ocr.readers import OCRReader
@@ -33,7 +33,7 @@ class LoopMetrics:
 def main() -> None:
     """Run the Poker Assistant main loop."""
     logger = get_logger()
-    config: AppConfig = load_config()
+    config = AppSettings()
     SecurityGuard.ensure_compliance()
 
     window: ClientRect | None = select_best_poker_window()

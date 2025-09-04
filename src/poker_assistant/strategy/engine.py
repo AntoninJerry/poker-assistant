@@ -1,6 +1,6 @@
 """Decision engine that orchestrates providers and exposes a single advise API."""
 
-from ..config import AppConfig
+from ..config import AppSettings
 from ..ocr.parsers import GameState
 from .providers.base import PolicyResponse, StrategyProvider
 from .providers.ollama_ import OllamaProvider
@@ -12,7 +12,7 @@ class DecisionEngine:
         self.providers = providers
 
     @classmethod
-    def from_config(cls, config: AppConfig) -> "DecisionEngine":
+    def from_config(cls, config: AppSettings) -> "DecisionEngine":
         providers: list[StrategyProvider] = [
             OllamaProvider(config),
             RulesProvider(),

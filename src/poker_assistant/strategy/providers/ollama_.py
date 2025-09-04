@@ -5,7 +5,7 @@ import re
 
 import httpx
 
-from ...config import AppConfig
+from ...config import AppSettings
 from ...ocr.parsers import GameState
 from .base import PolicyResponse, StrategyProvider
 
@@ -16,9 +16,9 @@ SYSTEM_PROMPT = (
 
 
 class OllamaProvider(StrategyProvider):
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppSettings) -> None:
         self.config = config
-        self.client = httpx.Client(timeout=self.config.policy.timeout_ms / 1000)
+        self.client = httpx.Client(timeout=1.2)  # 1.2 seconds timeout
 
     def _build_prompt(self, state: GameState) -> str:
         return (
@@ -43,12 +43,12 @@ class OllamaProvider(StrategyProvider):
 
     def advise(self, state: GameState) -> PolicyResponse:
         payload = {
-            "model": self.config.policy.model,
+            "model": self.config.MODEL_NAME,
             "prompt": self._build_prompt(state),
             "system": SYSTEM_PROMPT,
             "stream": False,
         }
-        url = f"{self.config.policy.host}/api/generate"
+        url = "http://127.0.0.1:11434/api/generate"
         resp = self.client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()

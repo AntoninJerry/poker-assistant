@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import pywinctl as pwc
 
+
 EXCLUDE_KEYWORDS = [
     "lobby",
     "home",
@@ -76,3 +77,34 @@ def select_best_poker_window() -> ClientRect | None:
             best_rect = rect
 
     return best_rect
+
+
+def main() -> None:
+    """Test script for window detection."""
+    print("🔍 Recherche de fenêtres poker...")
+    
+    # Lister toutes les fenêtres visibles pour debug
+    print("\n📋 Toutes les fenêtres visibles:")
+    for i, win in enumerate(pwc.getAllWindows()):
+        title = win.title or "<sans titre>"
+        try:
+            x, y, w, h = win.getClientFrame()
+            print(f"{i+1:2d}. {title[:50]:<50} | {w}x{h}")
+        except Exception:
+            print(f"{i+1:2d}. {title[:50]:<50} | [erreur géométrie]")
+    
+    # Tester la détection
+    result = select_best_poker_window()
+    
+    if result:
+        print(f"\n✅ Fenêtre poker détectée:")
+        print(f"   Position: {result.left}, {result.top}")
+        print(f"   Taille: {result.width}x{result.height}")
+        print(f"   Ratio: {result.width/result.height:.2f}")
+    else:
+        print("\n❌ Aucune fenêtre poker détectée")
+        print("💡 Assurez-vous qu'une fenêtre Winamax/PMU/Poker est ouverte")
+
+
+if __name__ == "__main__":
+    main()
