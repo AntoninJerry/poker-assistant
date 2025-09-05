@@ -1,148 +1,85 @@
-"""Room selector stub to switch calibration profiles."""
+"""Room selector for poker tables."""
 
-from dataclasses import dataclass
-from typing import Literal
+from __future__ import annotations
 
-try:
-    import customtkinter as ctk  # type: ignore[import-untyped]
-except ImportError:
-    ctk = None
+import tkinter as tk
+from typing import List, Optional
 
-
-RoomName = Literal["winamax", "pmu"]
+from ..windows.detector import CandidateWindow, detect_poker_tables
 
 
-@dataclass
-class RoomSelector:
-    current: RoomName = "winamax"
-
-    def set_room(self, room: RoomName) -> None:
-        self.current = room
-
-
-def show_room_selector() -> RoomName:
-    """Show a simple room selection dialog."""
-    if ctk is None:
-        print("❌ CustomTkinter not available")
-        return "winamax"
+def choose_table(room_pref: Optional[str] = None) -> Optional[CandidateWindow]:
+    """
+    Select poker table window.
+    If only one table detected -> auto-select.
+    Otherwise -> Tkinter selector.
+    """
+    candidates: List[CandidateWindow] = detect_poker_tables(room_pref)
     
-    print("🎯 Ouverture du sélecteur de room...")
+    if not candidates:
+        print("Aucune table poker détectée")
+        return None
+        
+    if len(candidates) == 1:
+        print(f"Auto-sélection: {candidates[0].title} ({candidates[0].room_guess})")
+        return candidates[0]
+
+    # Multiple candidates - show selector
+    root = tk.Tk()
+    root.title("Choisir la table (Winamax/PMU)")
+    root.geometry("800x400")
     
-    selected_room: RoomName = "winamax"
+    # Title
+    title_label = tk.Label(root, text="Tables poker détectées:", font=("Arial", 12, "bold"))
+    title_label.pack(pady=10)
     
-    def create_selector():
-        nonlocal selected_room
-        
-        app = ctk.CTk()
-        app.title("Poker Assistant - Sélection Room")
-        app.geometry("400x300")
-        app.resizable(False, False)
-        
-        # Titre
-        title_label = ctk.CTkLabel(
-            app, 
-            text="Choisissez votre room de poker",
-            font=ctk.CTkFont(size=20, weight="bold")
-        )
-        title_label.pack(pady=20)
-        
-        # Variable pour le choix
-        room_var = ctk.StringVar(value="winamax")
-        
-        # Frame pour les boutons radio
-        radio_frame = ctk.CTkFrame(app)
-        radio_frame.pack(pady=20, padx=40, fill="x")
-        
-        # Radio buttons
-        winamax_radio = ctk.CTkRadioButton(
-            radio_frame,
-            text="🟢 Winamax",
-            variable=room_var,
-            value="winamax"
-        )
-        winamax_radio.pack(pady=10, padx=20, anchor="w")
-        
-        pmu_radio = ctk.CTkRadioButton(
-            radio_frame,
-            text="🔵 PMU Poker",
-            variable=room_var,
-            value="pmu"
-        )
-        pmu_radio.pack(pady=10, padx=20, anchor="w")
-        
-        # Boutons d'action
-        button_frame = ctk.CTkFrame(app)
-        button_frame.pack(pady=20, fill="x", padx=40)
-        
-        def on_confirm():
-            nonlocal selected_room
-            selected_room = room_var.get()  # type: ignore[assignment]
-            app.quit()
-            app.destroy()
-        
-        def on_cancel():
-            app.quit()
-            app.destroy()
-        
-        confirm_btn = ctk.CTkButton(
-            button_frame,
-            text="✅ Confirmer",
-            command=on_confirm,
-            width=150
-        )
-        confirm_btn.pack(side="left", padx=10, pady=10)
-        
-        cancel_btn = ctk.CTkButton(
-            button_frame,
-            text="❌ Annuler",
-            command=on_cancel,
-            width=150
-        )
-        cancel_btn.pack(side="right", padx=10, pady=10)
-        
-        # Info
-        info_label = ctk.CTkLabel(
-            app,
-            text="Cette room sera utilisée pour la détection de tables",
-            font=ctk.CTkFont(size=12),
-            text_color="gray"
-        )
-        info_label.pack(pady=10)
-        
-        app.mainloop()
+    # Listbox
+    listbox = tk.Listbox(root, width=100, height=12, font=("Consolas", 10))
+    listbox.pack(padx=20, pady=10, fill="both", expand=True)
     
-    try:
-        create_selector()
-    except Exception as e:
-        print(f"❌ Erreur GUI: {e}")
-        print("🔄 Retour à winamax par défaut")
-        selected_room = "winamax"
+    # Add candidates to listbox
+    for i, c in enumerate(candidates):
+        room = c.room_guess or "?"
+        size = f"{c.bbox[2]-c.bbox[0]}x{c.bbox[3]-c.bbox[1]}"
+        item = f"[{i}] {room.upper()} | Score: {c.score:.2f} | {size} | {c.title}"
+        listbox.insert(tk.END, item)
     
-    return selected_room
+    # Select first item by default
+    listbox.selection_set(0)
+    
+    chosen: dict = {"value": None}
+    
+    def on_ok():
+        sel = listbox.curselection()
+        if sel:
+            chosen["value"] = candidates[int(sel[0])]
+        root.destroy()
+    
+    def on_cancel():
+        chosen["value"] = None
+        root.destroy()
+    
+    # Buttons
+    button_frame = tk.Frame(root)
+    button_frame.pack(pady=10)
+    
+    ok_btn = tk.Button(button_frame, text="OK", command=on_ok, width=10)
+    ok_btn.pack(side=tk.LEFT, padx=5)
+    
+    cancel_btn = tk.Button(button_frame, text="Annuler", command=on_cancel, width=10)
+    cancel_btn.pack(side=tk.LEFT, padx=5)
+    
+    # Instructions
+    instructions = tk.Label(
+        root, 
+        text="Sélectionnez une table et cliquez OK, ou Annuler pour quitter",
+        font=("Arial", 9),
+        fg="gray"
+    )
+    instructions.pack(pady=5)
+    
+    root.mainloop()
+    return chosen["value"]
 
 
-def main() -> None:
-    """Test du sélecteur de room."""
-    print("🎮 Test du sélecteur de room")
-    
-    if ctk is None:
-        print("❌ CustomTkinter non disponible")
-        print("💡 Installez avec: pip install customtkinter")
-        return
-    
-    print("🚀 Lancement du sélecteur...")
-    
-    # Test du sélecteur
-    room = show_room_selector()
-    print(f"✅ Room sélectionnée: {room}")
-    
-    # Test de la classe RoomSelector
-    selector = RoomSelector()
-    print(f"📋 Room par défaut: {selector.current}")
-    
-    selector.set_room(room)
-    print(f"📝 Room mise à jour: {selector.current}")
-
-
-if __name__ == "__main__":
-    main()
+__all__ = ["choose_table"]
