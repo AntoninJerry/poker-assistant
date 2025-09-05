@@ -3,8 +3,8 @@
 from ..config import AppSettings
 from ..ocr.parsers import GameState
 from .providers.base import PolicyResponse, StrategyProvider
-from .providers.ollama_ import OllamaProvider
-from .providers.rules_ import RulesProvider
+from .providers.ollama import OllamaProvider
+from .providers.rules import RulesProvider
 
 
 class DecisionEngine:

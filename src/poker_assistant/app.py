@@ -15,7 +15,7 @@ from .ocr.readers import OCRReader
 from .security.guard import SecurityGuard
 from .strategy.engine import DecisionEngine
 from .strategy.providers.base import PolicyResponse
-from .telemetry.logging import get_logger
+from .telemetry.logger import get_logger
 from .windows.detector import ClientRect, select_best_poker_window
 
 

@@ -1,0 +1,219 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Poker Room Configuration Schema",
+  "description": "JSON Schema for validating poker room YAML configurations",
+  "type": "object",
+  "required": ["room", "table_roi", "rois"],
+  "properties": {
+    "room": {
+      "type": "string",
+      "description": "Room identifier (winamax, pmu, etc.)",
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "table_roi": {
+      "type": "object",
+      "description": "Main table region of interest",
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "X coordinate (pixels)",
+          "minimum": 0
+        },
+        "y": {
+          "type": "number", 
+          "description": "Y coordinate (pixels)",
+          "minimum": 0
+        },
+        "width": {
+          "type": "number",
+          "description": "Width in pixels",
+          "minimum": 1
+        },
+        "height": {
+          "type": "number",
+          "description": "Height in pixels", 
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "rois": {
+      "type": "object",
+      "description": "Relative ROIs within table",
+      "required": ["pot", "to_call", "hero"],
+      "properties": {
+        "pot": {
+          "$ref": "#/definitions/roi",
+          "description": "Pot amount display area"
+        },
+        "to_call": {
+          "$ref": "#/definitions/roi", 
+          "description": "Amount to call display area"
+        },
+        "hero": {
+          "$ref": "#/definitions/roi",
+          "description": "Hero cards area"
+        },
+        "board1": {
+          "$ref": "#/definitions/roi",
+          "description": "First board card"
+        },
+        "board2": {
+          "$ref": "#/definitions/roi",
+          "description": "Second board card"
+        },
+        "board3": {
+          "$ref": "#/definitions/roi",
+          "description": "Third board card"
+        },
+        "board4": {
+          "$ref": "#/definitions/roi",
+          "description": "Fourth board card (turn)"
+        },
+        "board5": {
+          "$ref": "#/definitions/roi",
+          "description": "Fifth board card (river)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "templates": {
+      "type": "object",
+      "description": "Template matching configuration",
+      "properties": {
+        "base_dir": {
+          "type": "string",
+          "description": "Base directory for templates"
+        },
+        "ranks_dir": {
+          "type": "string",
+          "description": "Directory for rank templates"
+        },
+        "suits_dir": {
+          "type": "string", 
+          "description": "Directory for suit templates"
+        },
+        "rank_threshold": {
+          "type": "number",
+          "description": "Template matching threshold for ranks",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.8
+        },
+        "suit_threshold": {
+          "type": "number",
+          "description": "Template matching threshold for suits",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.8
+        },
+        "scales": {
+          "type": "array",
+          "description": "Scales for multi-scale template matching",
+          "items": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 3.0
+          },
+          "default": [0.8, 1.0, 1.2]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ocr": {
+      "type": "object",
+      "description": "OCR-specific configuration",
+      "properties": {
+        "language": {
+          "type": "string",
+          "description": "OCR language code",
+          "default": "en"
+        },
+        "gpu": {
+          "type": "boolean",
+          "description": "Enable GPU acceleration",
+          "default": true
+        },
+        "confidence_threshold": {
+          "type": "number",
+          "description": "Minimum confidence for OCR results",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.7
+        }
+      },
+      "additionalProperties": false
+    },
+    "window": {
+      "type": "object",
+      "description": "Window detection configuration",
+      "properties": {
+        "title_keywords": {
+          "type": "array",
+          "description": "Keywords to match in window title",
+          "items": {
+            "type": "string"
+          }
+        },
+        "class_keywords": {
+          "type": "array",
+          "description": "Keywords to match in window class",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude_keywords": {
+          "type": "array",
+          "description": "Keywords to exclude from detection",
+          "items": {
+            "type": "string"
+          }
+        },
+        "min_score": {
+          "type": "number",
+          "description": "Minimum detection score",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.6
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "roi": {
+      "type": "object",
+      "description": "Region of Interest with relative coordinates",
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "Relative X coordinate (0.0 to 1.0)",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "y": {
+          "type": "number",
+          "description": "Relative Y coordinate (0.0 to 1.0)",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "width": {
+          "type": "number",
+          "description": "Relative width (0.0 to 1.0)",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "height": {
+          "type": "number",
+          "description": "Relative height (0.0 to 1.0)",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
