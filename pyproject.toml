@@ -29,6 +29,7 @@ dependencies = [
   "httpx>=0.27",
   "customtkinter>=5.2",
   "pywinctl>=0.4",
+  "pygetwindow>=0.0.9",
   "pywin32>=306; platform_system == 'Windows'",
 ]
 

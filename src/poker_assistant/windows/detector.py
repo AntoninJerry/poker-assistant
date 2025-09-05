@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import pygetwindow as gw
+try:
+    import pygetwindow as gw
+except ImportError:
+    # Fallback to pywinctl if pygetwindow not available
+    import pywinctl as gw
 
 
 @dataclass
@@ -22,17 +26,95 @@ class CandidateWindow:
 WHITELIST_PROCESS_SUBSTR = ("winamax", "pmu")
 WHITELIST_TITLE_SUBSTR = ("table", "winamax", "pmu")
 BLACKLIST_TITLE_SUBSTR = (
+    # Lobby/Home
     "lobby",
     "home", 
+    "accueil",
+    "main",
+    "principal",
+    
+    # Cashier/Shop
     "cashier",
     "caisse",
+    "shop",
+    "boutique",
+    "store",
+    "magasin",
+    
+    # Settings
     "réglages",
     "paramètres",
     "settings",
+    "preferences",
+    "préférences",
+    "config",
+    "configuration",
+    
+    # Tournament types (not cash tables)
+    "tournoi",
+    "tournament",
+    "sng",
+    "sit & go",
+    "spin & go",
+    "zoom",
+    "fast",
+    "speed",
+    "mtt",
+    "multi-table",
+    "satellite",
+    "qualifier",
+    "qualification",
+    "freeroll",
+    "freerolls",
+    
+    # UI elements
+    "leaderboard",
+    "classement",
+    "ranking",
+    "stats",
+    "statistiques",
+    "history",
+    "historique",
+    "notes",
+    "chat",
+    "messages",
+    "support",
+    "aide",
+    "help",
+    "faq",
+    "rules",
+    "règles",
+    "terms",
+    "conditions",
+    "privacy",
+    "confidentialité",
+    "about",
+    "à propos",
+    
+    # System dialogs
+    "dialog",
+    "dialogue",
+    "popup",
+    "modal",
+    "alert",
+    "warning",
+    "error",
+    "erreur",
+    "info",
+    "information",
+    "confirm",
+    "confirmation",
+    
+    # Development tools
     "editor",
     "code",
     "pycharm",
     "visual studio",
+    "vscode",
+    "sublime",
+    "atom",
+    "notepad",
+    "notepad++",
 )
 
 
@@ -48,8 +130,12 @@ def detect_poker_tables(room_preference: Optional[str] = None) -> List[Candidate
     """
     candidates: List[CandidateWindow] = []
     
-    # Get all windows
-    windows = gw.getAllWindows()
+    # Get all windows (compatible with both pygetwindow and pywinctl)
+    try:
+        windows = gw.getAllWindows()
+    except AttributeError:
+        # pywinctl uses different method
+        windows = gw.getAllWindows()
     
     for window in windows:
         try:
@@ -66,6 +152,12 @@ def detect_poker_tables(room_preference: Optional[str] = None) -> List[Candidate
                     proc_name = proc.name()
                 except:
                     # Fallback: extract from title or use empty
+                    proc_name = ""
+            elif hasattr(window, 'getAppName'):
+                # pywinctl method
+                try:
+                    proc_name = window.getAppName() or ""
+                except:
                     proc_name = ""
             
             title_norm = _norm(title)
@@ -103,14 +195,37 @@ def detect_poker_tables(room_preference: Optional[str] = None) -> List[Candidate
             if room_preference and room_guess and room_guess != room_preference:
                 room_score *= 0.6
             
-            # Calculate final score
-            base = 0.6 if any(t in title_norm for t in ("table",)) else 0.5
-            proc_bonus = 0.1 if proc_match else 0.0
-            score = max(0.0, min(1.0, base + proc_bonus + 0.6 * room_score))
+            # Calculate final score with better table detection
+            base_score = 0.3
             
-            # Create candidate
+            # Bonus for table-related keywords
+            table_keywords = ("table", "cash", "ring", "hold'em", "holdem", "texas", "omaha", "poker")
+            table_bonus = 0.3 if any(t in title_norm for t in table_keywords) else 0.0
+            
+            # Bonus for process match
+            proc_bonus = 0.2 if proc_match else 0.0
+            
+            # Bonus for room match
+            room_bonus = 0.2 * room_score
+            
+            # Penalty for suspicious titles (lobby-like)
+            lobby_keywords = ("lobby", "home", "accueil", "main", "principal", "tournoi", "tournament")
+            lobby_penalty = -0.4 if any(l in title_norm for l in lobby_keywords) else 0.0
+            
+            # Size bonus (tables are usually larger)
+            size_bonus = 0.1 if width > 800 and height > 600 else 0.0
+            
+            score = max(0.0, min(1.0, base_score + table_bonus + proc_bonus + room_bonus + lobby_penalty + size_bonus))
+            
+            # Create candidate (compatible with both libraries)
+            handle = 0
+            if hasattr(window, '_hWnd'):
+                handle = window._hWnd
+            elif hasattr(window, 'getHandle'):
+                handle = window.getHandle()
+            
             candidate = CandidateWindow(
-                handle=getattr(window, '_hWnd', 0),
+                handle=handle,
                 title=title,
                 process=proc_name,
                 bbox=(window.left, window.top, window.left + width, window.top + height),

@@ -1,152 +1,87 @@
 room: winamax
-version: 1
-
-window:
-  title_patterns: ["Winamax"]
-  blacklist_title: ["Lobby", "Home", "Caisse", "Paramètres"]
-
+version: 2
 scaling:
   mode: normalized
   dpi_compensation: true
-  dpi_scale: 1.0
-
-# Zones d'ancrage principales (coordonnées absolues dans la fenêtre)
+client_size:
+  w: 1376
+  h: 1040
 anchors:
   table_bounds:
-    x: 0.04
-    y: 0.08
-    w: 0.92
-    h: 0.84
-  right_history_panel:
-    x: 0.85
-    y: 0.05
-    w: 0.15
-    h: 0.90
-
-# ROIs référencées à table_bounds (coordonnées relatives)
-rois:
-  # Cartes du joueur
-  hero_cards_left:
-    ref: table_bounds
-    x: 0.451
-    y: 0.689
-    w: 0.028
-    h: 0.098
-  hero_cards_right:
-    ref: table_bounds
-    x: 0.481
-    y: 0.686
-    w: 0.027
-    h: 0.100
-
-  # Board (cartes communes)
-  board_card_1:
-    ref: table_bounds
-    x: 0.317
-    y: 0.289
-    w: 0.070
-    h: 0.193
-  board_card_2:
-    ref: table_bounds
-    x: 0.391
-    y: 0.289
-    w: 0.070
-    h: 0.194
-  board_card_3:
-    ref: table_bounds
-    x: 0.465
-    y: 0.289
-    w: 0.072
-    h: 0.193
-  board_card_4:
-    ref: table_bounds
-    x: 0.538
-    y: 0.289
-    w: 0.072
-    h: 0.195
-  board_card_5:
-    ref: table_bounds
-    x: 0.612
-    y: 0.291
-    w: 0.072
-    h: 0.194
-
-  # Pot et stack
-  pot_value:
-    ref: table_bounds
-    x: 0.511
-    y: 0.511
-    w: 0.111
-    h: 0.067
-  hero_stack_value:
-    ref: table_bounds
-    x: 0.447
-    y: 0.819
-    w: 0.109
-    h: 0.059
-
-  # Actions
-  action_bar:
-    ref: table_bounds
-    x: 0.206
-    y: 1.005
-    w: 0.578
-    h: 0.087
-  fold_btn:
-    ref: table_bounds
-    x: 0.206
-    y: 1.005
-    w: 0.150
-    h: 0.087
-  call_btn:
-    ref: table_bounds
-    x: 0.378
-    y: 1.005
-    w: 0.150
-    h: 0.087
-  raise_btn:
-    ref: table_bounds
-    x: 0.550
-    y: 1.005
-    w: 0.150
-    h: 0.087
-
-  # Dealer
-  dealer_search:
-    ref: table_bounds
-    x: 0.450
-    y: 0.450
-    w: 0.100
-    h: 0.100
-
-# Métadonnées de la table
-table_meta:
-  seats_n: 5
-  max_players: 9
-
-# Configuration OCR
-ocr:
-  cards:
-    strict: true
-    board_tolerant: true
-    min_rank_conf: 0.92
-    min_suit_conf: 0.85
-    min_card_score: 0.35
-    min_edge_density: 0.012
-    min_white_ratio: 0.04
-    min_rank_conf_board: 0.90
-    min_suit_conf_board: 0.55
-    min_card_score_board: 0.25
-    min_white_ratio_board: 0.02
-
-# Templates pour confirmation
+    x: 0.0
+    y: 0.0
+    w: 1.0
+    h: 1.0
+layouts:
+  default:
+    rois:
+      board_card1:
+        x: 0.29433139534883723
+        y: 0.34134615384615385
+        w: 0.07630813953488372
+        h: 0.15384615384615385
+      board_card2:
+        x: 0.37790697674418605
+        y: 0.34134615384615385
+        w: 0.07630813953488372
+        h: 0.15384615384615385
+      board_card3:
+        x: 0.46148255813953487
+        y: 0.34134615384615385
+        w: 0.07630813953488372
+        h: 0.15384615384615385
+      board_card4:
+        x: 0.5414244186046512
+        y: 0.34134615384615385
+        w: 0.07994186046511628
+        h: 0.15384615384615385
+      board_card5:
+        x: 0.625
+        y: 0.34134615384615385
+        w: 0.07630813953488372
+        h: 0.15384615384615385
+      hero_cards_left:
+        x: 0.44694767441860467
+        y: 0.6634615384615384
+        w: 0.029069767441860465
+        h: 0.08173076923076923
+      hero_cards_right:
+        x: 0.47601744186046513
+        y: 0.6634615384615384
+        w: 0.032703488372093026
+        h: 0.08173076923076923
+      hero_stack:
+        x: 0.41424418604651164
+        y: 0.7692307692307693
+        w: 0.18895348837209303
+        h: 0.04326923076923077
+      hero_name:
+        x: 0.3960755813953488
+        y: 0.7451923076923077
+        w: 0.22529069767441862
+        h: 0.02403846153846154
+      hero_action_buttons:
+        x: 0.19622093023255813
+        y: 0.9230769230769231
+        w: 0.6068313953488372
+        h: 0.0673076923076923
+      pot_value:
+        x: 0.5087209302325582
+        y: 0.5336538461538461
+        w: 0.14171511627906977
+        h: 0.03365384615384615
+      pot_label:
+        x: 0.4433139534883721
+        y: 0.5336538461538461
+        w: 0.06540697674418605
+        h: 0.03365384615384615
+      table_zone:
+        x: 0.003633720930232558
+        y: 0.02403846153846154
+        w: 0.9920058139534884
+        h: 0.9711538461538461
+  history_open:
+    rois: {}
+screenshot: rooms/winamax_reference.png
 templates:
-  confirmators:
-    - path: "dealer_btn.png"
-      roi:
-        ref: table_bounds
-        x: 0.490
-        y: 0.530
-        w: 0.060
-        h: 0.060
-      threshold: 0.72
+  confirmators: []
