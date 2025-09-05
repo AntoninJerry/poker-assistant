@@ -1,92 +1,111 @@
-"""OCR readers built on EasyOCR with OpenCV pre-processing.
+"""Module de lecture OCR pour l'analyse des tables poker.
 
-Implements prioritized reading of ROIs: pot → to_call → hero cards → board.
-This module provides a high-level `OCRReader.read_state` API returning a
-`GameState` datamodel parsed from the frame and room configuration.
+Ce module gère la reconnaissance de texte dans les images
+des tables poker en utilisant EasyOCR avec préprocessing optimisé.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import cv2
-import easyocr  # type: ignore[import-untyped]
 import numpy as np
-import numpy.typing as npt
+from functools import lru_cache
+from typing import Optional
 
-from ..config import AppSettings
-from .parsers import GameState, ParsedAmounts
-
-
-@dataclass
-class ROI:
-    name: str
-    x: int
-    y: int
-    w: int
-    h: int
+try:
+    import easyocr
+except ImportError:
+    easyocr = None
 
 
-class OCRReader:
-    def __init__(self) -> None:
-        # Lazy load reader to avoid heavy startup cost if not needed later
-        self._reader: easyocr.Reader | None = None
+class OCRReadError(Exception):
+    """Exception levée lors d'erreurs de lecture OCR."""
+    pass
 
-    def _get_reader(self) -> easyocr.Reader:
-        if self._reader is None:
-            # English and numbers should cover amounts; extend per room if needed
-            self._reader = easyocr.Reader(["en"])
-        return self._reader
 
-    def _preprocess_amount(self, roi_img: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
-        gray = cv2.cvtColor(roi_img, cv2.COLOR_RGB2GRAY)
-        gray = cv2.bilateralFilter(gray, d=5, sigmaColor=50, sigmaSpace=50)
-        _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        bw_u8: npt.NDArray[np.uint8] = np.asarray(bw, dtype=np.uint8)
-        return bw_u8
+@lru_cache(maxsize=1)
+def reader() -> easyocr.Reader:
+    """Retourne l'instance singleton du lecteur EasyOCR.
+    
+    Returns:
+        Instance EasyOCR configurée pour l'anglais et le français
+        
+    Raises:
+        OCRReadError: Si EasyOCR n'est pas disponible
+    """
+    if not easyocr:
+        raise OCRReadError("EasyOCR non disponible. Installez avec: pip install easyocr")
+    
+    return easyocr.Reader(["en", "fr"], gpu=False, verbose=False)
 
-    def _read_text(self, image: npt.NDArray[np.uint8]) -> str:
-        reader = self._get_reader()
-        result = reader.readtext(image)
-        texts = [t[1] for t in result]
-        return " ".join(texts)
 
-    def read_state(self, frame_rgb: npt.NDArray[np.uint8], config: AppSettings) -> GameState:
-        # Placeholder ROIs; will be driven by YAML in next iterations
-        h, w, _ = frame_rgb.shape
-        roi_pot = ROI(
-            "pot",
-            x=int(0.45 * w),
-            y=int(0.10 * h),
-            w=int(0.10 * w),
-            h=int(0.06 * h),
+def preprocess(img_bgr: np.ndarray) -> np.ndarray:
+    """Préprocesse une image BGR pour optimiser la reconnaissance OCR.
+    
+    Args:
+        img_bgr: Image source en format BGR
+        
+    Returns:
+        Image préprocessée en niveaux de gris avec seuillage adaptatif
+        
+    Raises:
+        OCRReadError: Si l'image est invalide
+    """
+    if img_bgr is None or img_bgr.size == 0:
+        raise OCRReadError("Image source vide ou invalide")
+    
+    try:
+        # Conversion en niveaux de gris
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        
+        # Filtrage bilatéral pour réduire le bruit tout en préservant les contours
+        filtered = cv2.bilateralFilter(gray, 7, 50, 50)
+        
+        # Seuillage adaptatif pour améliorer la lisibilité du texte
+        threshold = cv2.adaptiveThreshold(
+            filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 31, 5
         )
-        roi_to_call = ROI(
-            "to_call",
-            x=int(0.45 * w),
-            y=int(0.85 * h),
-            w=int(0.10 * w),
-            h=int(0.06 * h),
-        )
+        
+        return threshold
+    except Exception as e:
+        raise OCRReadError(f"Erreur de préprocessing: {e}")
 
-        pot_img = frame_rgb[
-            roi_pot.y : roi_pot.y + roi_pot.h,
-            roi_pot.x : roi_pot.x + roi_pot.w,
+
+def read_text(img_bgr: np.ndarray, allowlist: Optional[str] = None) -> str:
+    """Lit le texte dans une image BGR en utilisant EasyOCR.
+    
+    Args:
+        img_bgr: Image source en format BGR
+        allowlist: Caractères autorisés (optionnel)
+        
+    Returns:
+        Texte reconnu concaténé en une seule chaîne
+        
+    Raises:
+        OCRReadError: Si la lecture OCR échoue
+    """
+    if img_bgr is None or img_bgr.size == 0:
+        raise OCRReadError("Image source vide ou invalide")
+    
+    try:
+        # Préprocessing de l'image
+        processed_img = preprocess(img_bgr)
+        
+        # Lecture OCR avec EasyOCR
+        ocr_reader = reader()
+        results = ocr_reader.readtext(
+            processed_img, 
+            detail=1, 
+            paragraph=False, 
+            allowlist=allowlist
+        )
+        
+        # Filtrage des résultats par confiance (seuil: 40%)
+        text_parts = [
+            text for _, text, confidence in results 
+            if confidence >= 0.40
         ]
-        call_img = frame_rgb[
-            roi_to_call.y : roi_to_call.y + roi_to_call.h,
-            roi_to_call.x : roi_to_call.x + roi_to_call.w,
-        ]
-
-        pot_text = self._read_text(self._preprocess_amount(pot_img))
-        call_text = self._read_text(self._preprocess_amount(call_img))
-
-        amounts = ParsedAmounts.from_texts(pot_text, call_text)
-
-        return GameState(
-            pot_bb=amounts.pot_bb,
-            to_call_bb=amounts.to_call_bb,
-            street="preflop",
-            hero_cards=None,
-            board_cards=None,
-        )
+        
+        return " ".join(text_parts).strip()
+    except Exception as e:
+        raise OCRReadError(f"Erreur de lecture OCR: {e}")
