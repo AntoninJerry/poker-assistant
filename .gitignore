@@ -137,6 +137,14 @@ stop_all_python.py
 example_*.yaml
 GUIDE_DEPANNAGE_*.md
 
+# Debug et fichiers temporaires
+debug_*.png
+preprocessing_*.png
+debug_recognition.py
+test_preprocessing.py
+test_card_recognition.py
+compare_templates.py
+
 # IDE
 .vscode/
 .idea/

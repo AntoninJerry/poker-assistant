@@ -29,6 +29,16 @@ try:
 except Exception:
     pass
 
+# Import de la reconnaissance
+try:
+    from poker_assistant.ocr.recognition_integration import RecognitionIntegration
+    import cv2
+    import numpy as np
+    RECOGNITION_AVAILABLE = True
+except ImportError:
+    RECOGNITION_AVAILABLE = False
+    print("⚠️ Module de reconnaissance non disponible")
+
 try:
     import mss  # capture écran rapide
 except ImportError:
@@ -186,6 +196,19 @@ class LivePreview(tk.Tk):
         self.layout_var = tk.StringVar(value=layout)
         self.relative_to_var = tk.StringVar(value=relative_to)
 
+        # Intégration de la reconnaissance
+        self.recognition_integration: Optional[RecognitionIntegration] = None
+        if RECOGNITION_AVAILABLE and yaml_path:
+            try:
+                self.recognition_integration = RecognitionIntegration(
+                    yaml_path=yaml_path,
+                    templates_dir="assets/templates"
+                )
+                print("✅ Module de reconnaissance intégré")
+            except Exception as e:
+                print(f"⚠️ Erreur intégration reconnaissance: {e}")
+                self.recognition_integration = None
+
         # UI d'abord
         self._build_ui()
 
@@ -235,10 +258,19 @@ class LivePreview(tk.Tk):
 
         ttk.Button(top, text="Forcer focus", command=self._force_focus).pack(side="left", padx=(8, 2))
         ttk.Button(top, text="Exporter cartes (PNG)", command=self._export_cards).pack(side="left", padx=(8, 2))
+        ttk.Button(top, text="Exporter les templates", command=self._export_templates).pack(side="left", padx=(8, 2))
+        
+        # Contrôles de reconnaissance
+        if self.recognition_integration:
+            ttk.Button(top, text="🔍 Reconnaissance", command=self._toggle_recognition).pack(side="left", padx=(8, 2))
 
         ttk.Label(top, text="Zoom:").pack(side="left", padx=(8, 2))
         self.scale_var = tk.DoubleVar(value=self.scale)
         ttk.Scale(top, from_=0.3, to=3.0, variable=self.scale_var, command=self._on_zoom_change).pack(side="left", padx=(0, 8))
+
+        # Panneau de reconnaissance
+        if self.recognition_integration:
+            self._build_recognition_panel()
 
         self.fps_label = ttk.Label(top, text="0 fps")
         self.fps_label.pack(side="right")
@@ -447,6 +479,18 @@ class LivePreview(tk.Tk):
             self._consecutive_failures = 0
             self._last_raw_size = raw.size
             W, H = raw.size
+            
+            # Intégration de la reconnaissance
+            if self.recognition_integration and self.recognition_integration.recognition_enabled:
+                # Convertit l'image PIL en numpy array pour OpenCV
+                frame_array = np.array(raw)
+                frame_bgr = cv2.cvtColor(frame_array, cv2.COLOR_RGB2BGR)
+                
+                # Envoie le frame au pipeline de reconnaissance
+                self.recognition_integration.process_frame(frame_bgr)
+                
+                # Met à jour l'affichage de la reconnaissance
+                self._update_recognition_display()
 
             # Choisir l'échelle effective
             eff_scale = self.scale
@@ -546,7 +590,7 @@ class LivePreview(tk.Tk):
                     continue
                 
                 # Convertit la ROI de la carte en pixels
-                card_x0, card_y0, card_x1, card_y1 = self._roi_to_pixels(card_roi, disp_w, disp_h)
+                card_x0, card_y0, card_x1, card_y1 = self._roi_to_pixels_legacy(card_roi, disp_w, disp_h)
                 
                 # Dessine chaque zone de la carte
                 for zone_name, zone_config in zones.items():
@@ -603,13 +647,17 @@ class LivePreview(tk.Tk):
             if not self.cfg or 'layouts' not in self.cfg:
                 return None
             
-            layout = self.cfg['layouts'].get(self.layout, {})
+            layout = self.cfg['layouts'].get(self.layout_var.get(), {})
             rois = layout.get('rois', {})
-            return rois.get(card_name)
+            
+            if card_name in rois:
+                return rois[card_name]
+            else:
+                return None
         except Exception:
             return None
 
-    def _roi_to_pixels(self, roi_config: Dict[str, float], disp_w: int, disp_h: int) -> Tuple[int, int, int, int]:
+    def _roi_to_pixels_legacy(self, roi_config: Dict[str, float], disp_w: int, disp_h: int) -> Tuple[int, int, int, int]:
         """Convertit une ROI en coordonnées pixels."""
         try:
             x = roi_config.get('x', 0)
@@ -703,6 +751,200 @@ class LivePreview(tk.Tk):
                 
         except Exception as e:
             messagebox.showerror("Export", f"Erreur lors de l'export:\n{e}")
+
+    def _export_templates(self):
+        """Exporte les templates de rangs et couleurs selon les zones calibrées."""
+        try:
+            # Vérifie que les zones de cartes sont disponibles
+            if not self.cfg or 'card_zones' not in self.cfg:
+                messagebox.showerror("Export Templates", "Aucune zone de carte calibrée trouvée dans le YAML")
+                return
+            
+            card_zones = self.cfg['card_zones']
+            if not card_zones:
+                messagebox.showerror("Export Templates", "Aucune zone de carte trouvée dans le YAML")
+                return
+            
+            # Recapture ou utilise la dernière image
+            if self._last_raw is None:
+                self._capture_raw()
+            
+            if self._last_raw is None:
+                messagebox.showerror("Export Templates", "Aucune image disponible pour l'export")
+                return
+            
+            # Détermine la room et le layout
+            room_name = "winamax"  # Pour l'instant, on ne nourrit que Winamax
+            layout_name = self.layout_var.get()
+            
+            # Crée la structure de dossiers selon la nouvelle arborescence
+            base_dir = "assets"
+            templates_dir = os.path.join(base_dir, "templates", room_name, layout_name)
+            ranks_dir = os.path.join(templates_dir, "ranks")
+            suits_dir = os.path.join(templates_dir, "suits")
+            
+            # Crée tous les dossiers nécessaires
+            os.makedirs(ranks_dir, exist_ok=True)
+            os.makedirs(suits_dir, exist_ok=True)
+            
+            # Compteurs pour les noms de fichiers incrémentaux
+            rank_counter = self._get_next_template_number(ranks_dir, "rank")
+            suit_counter = self._get_next_template_number(suits_dir, "suit")
+            
+            exported_ranks = 0
+            exported_suits = 0
+            
+            # Parcourt toutes les cartes avec leurs zones
+            for card_name, zones in card_zones.items():
+                # Trouve la ROI de la carte dans le layout
+                card_roi = self._get_card_roi(card_name)
+                if not card_roi:
+                    continue
+                
+                # Convertit la ROI de la carte en pixels
+                card_x0, card_y0, card_x1, card_y1 = self._roi_to_pixels_legacy(card_roi, self._last_raw.width, self._last_raw.height)
+                
+                # Dessine chaque zone de la carte
+                for zone_name, zone_config in zones.items():
+                    zone_type = zone_config.get('type', 'unknown')
+                    zone_x = zone_config.get('x', 0)
+                    zone_y = zone_config.get('y', 0)
+                    zone_w = zone_config.get('w', 0)
+                    zone_h = zone_config.get('h', 0)
+                    
+                    # Calcule les coordonnées absolues de la zone
+                    zone_abs_x0 = card_x0 + int(zone_x * (card_x1 - card_x0))
+                    zone_abs_y0 = card_y0 + int(zone_y * (card_y1 - card_y0))
+                    zone_abs_x1 = card_x0 + int((zone_x + zone_w) * (card_x1 - card_x0))
+                    zone_abs_y1 = card_y0 + int((zone_y + zone_h) * (card_y1 - card_y0))
+                    
+                    # Vérifie que la zone est valide
+                    if zone_abs_x1 <= zone_abs_x0 or zone_abs_y1 <= zone_abs_y0:
+                        continue
+                    
+                    # Crop la zone
+                    try:
+                        zone_img = self._last_raw.crop((zone_abs_x0, zone_abs_y0, zone_abs_x1, zone_abs_y1))
+                        
+                        # Sauvegarde selon le type avec noms incrémentaux
+                        if zone_type == 'rank':
+                            filename = f"rank_{rank_counter:03d}.png"
+                            filepath = os.path.join(ranks_dir, filename)
+                            zone_img.save(filepath, "PNG")
+                            exported_ranks += 1
+                            rank_counter += 1
+                            
+                        elif zone_type == 'suit':
+                            filename = f"suit_{suit_counter:03d}.png"
+                            filepath = os.path.join(suits_dir, filename)
+                            zone_img.save(filepath, "PNG")
+                            exported_suits += 1
+                            suit_counter += 1
+                            
+                    except Exception as e:
+                        print(f"Erreur export zone {zone_name} ({zone_type}): {e}")
+                        continue
+            
+            # Message de confirmation
+            total_exported = exported_ranks + exported_suits
+            if total_exported > 0:
+                message = f"Templates exportés avec succès!\n\n"
+                message += f"🔴 Rangs: {exported_ranks} templates\n"
+                message += f"🟢 Couleurs: {exported_suits} templates\n"
+                message += f"📁 Dossier: {os.path.abspath(templates_dir)}\n\n"
+                message += f"💡 Structure: assets/templates/{room_name}/{layout_name}/\n"
+                message += "🔄 Export incrémental activé - les clics suivants ajouteront des templates"
+                messagebox.showinfo("Export Templates", message)
+            else:
+                messagebox.showwarning("Export Templates", "Aucun template n'a pu être exporté")
+                
+        except Exception as e:
+            messagebox.showerror("Export Templates", f"Erreur lors de l'export des templates: {e}")
+
+    def _build_recognition_panel(self):
+        """Construit le panneau d'affichage de la reconnaissance."""
+        # Panneau de reconnaissance
+        recognition_frame = ttk.LabelFrame(self, text="🎯 Reconnaissance de Cartes", padding=8)
+        recognition_frame.pack(fill="x", padx=6, pady=(0, 6))
+        
+        # État du jeu
+        self.game_state_label = ttk.Label(recognition_frame, text="🔍 Détection...", font=("Arial", 10, "bold"))
+        self.game_state_label.pack(anchor="w")
+        
+        # Cartes hero
+        self.hero_cards_label = ttk.Label(recognition_frame, text="Hero: ?? ??", font=("Arial", 9))
+        self.hero_cards_label.pack(anchor="w")
+        
+        # Cartes du board
+        self.board_cards_label = ttk.Label(recognition_frame, text="Board: ?? ?? ?? ?? ??", font=("Arial", 9))
+        self.board_cards_label.pack(anchor="w")
+        
+        # Confiance
+        self.confidence_label = ttk.Label(recognition_frame, text="Confiance: --", font=("Arial", 8))
+        self.confidence_label.pack(anchor="w")
+        
+        # Statut
+        self.recognition_status_label = ttk.Label(recognition_frame, text="🔴 Désactivé", font=("Arial", 8))
+        self.recognition_status_label.pack(anchor="w")
+
+    def _toggle_recognition(self):
+        """Active/désactive la reconnaissance."""
+        if not self.recognition_integration:
+            return
+        
+        if self.recognition_integration.recognition_enabled:
+            # Désactive la reconnaissance
+            self.recognition_integration.recognition_enabled = False
+            self.recognition_integration.stop_recognition()
+            print("🔴 Reconnaissance désactivée")
+        else:
+            # Active la reconnaissance
+            self.recognition_integration.recognition_enabled = True
+            self.recognition_integration.start_recognition()
+            print("🟢 Reconnaissance activée")
+
+    def _update_recognition_display(self):
+        """Met à jour l'affichage de la reconnaissance."""
+        if not self.recognition_integration:
+            return
+        
+        # Met à jour les labels
+        self.game_state_label.config(text=self.recognition_integration.get_game_state_display())
+        self.hero_cards_label.config(text=f"Hero: {self.recognition_integration.get_hero_cards_display()}")
+        self.board_cards_label.config(text=f"Board: {self.recognition_integration.get_board_cards_display()}")
+        self.confidence_label.config(text=self.recognition_integration.get_confidence_display())
+        self.recognition_status_label.config(text=self.recognition_integration.get_recognition_status())
+
+    def _get_next_template_number(self, directory: str, prefix: str) -> int:
+        """Retourne le prochain numéro disponible pour les templates."""
+        try:
+            if not os.path.exists(directory):
+                return 1
+            
+            # Liste tous les fichiers avec le préfixe donné
+            existing_files = [f for f in os.listdir(directory) if f.startswith(prefix) and f.endswith('.png')]
+            
+            if not existing_files:
+                return 1
+            
+            # Extrait les numéros existants
+            numbers = []
+            for filename in existing_files:
+                try:
+                    # Format attendu: prefix_XXX.png
+                    number_part = filename.replace(f"{prefix}_", "").replace(".png", "")
+                    numbers.append(int(number_part))
+                except ValueError:
+                    continue
+            
+            if not numbers:
+                return 1
+            
+            # Retourne le prochain numéro disponible
+            return max(numbers) + 1
+            
+        except Exception:
+            return 1
     
     def _get_card_rois(self) -> Dict[str, Tuple[int, int, int, int]]:
         """Retourne les ROIs de cartes en pixels."""
