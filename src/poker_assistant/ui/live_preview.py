@@ -173,6 +173,7 @@ class LivePreview(tk.Tk):
         self._running = True
         self._photo = None
         self._last_raw_size: Optional[Tuple[int, int]] = None
+        self._last_raw: Optional[Image.Image] = None  # Stockage du dernier raw pour export instantané
         self._sct = mss.mss() if mss else None
 
         # offsets de centrage dans le canvas
@@ -219,9 +220,11 @@ class LivePreview(tk.Tk):
         self.show_rectangles = tk.BooleanVar(value=True)
         self.show_labels = tk.BooleanVar(value=True)
         self.show_table_zone = tk.BooleanVar(value=True)
+        self.show_card_zones = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="Rectangles", variable=self.show_rectangles, command=self._request_redraw).pack(side="left", padx=(8, 2))
         ttk.Checkbutton(top, text="Noms", variable=self.show_labels, command=self._request_redraw).pack(side="left", padx=(4, 2))
         ttk.Checkbutton(top, text="Afficher table_zone", variable=self.show_table_zone, command=self._request_redraw).pack(side="left", padx=(4, 2))
+        ttk.Checkbutton(top, text="Zones Cartes", variable=self.show_card_zones, command=self._request_redraw).pack(side="left", padx=(4, 2))
         ttk.Checkbutton(top, text="Anti-miroir", variable=self.anti_mirror).pack(side="left", padx=(8, 2))
         ttk.Checkbutton(top, text="Fit à la fenêtre", variable=self.fit_to_window, command=self._request_redraw).pack(side="left", padx=(8, 2))
 
@@ -231,6 +234,7 @@ class LivePreview(tk.Tk):
         ttk.Button(top, text="Normal", command=lambda: self.state("normal")).pack(side="left", padx=(2, 8))
 
         ttk.Button(top, text="Forcer focus", command=self._force_focus).pack(side="left", padx=(8, 2))
+        ttk.Button(top, text="Exporter cartes (PNG)", command=self._export_cards).pack(side="left", padx=(8, 2))
 
         ttk.Label(top, text="Zoom:").pack(side="left", padx=(8, 2))
         self.scale_var = tk.DoubleVar(value=self.scale)
@@ -325,32 +329,43 @@ class LivePreview(tk.Tk):
             return False
 
     def _capture_raw(self) -> Optional[Image.Image]:
-        bbox = self._current_bbox()
-
-        # 1) PrintWindow si possible (anti-occlusion/mirror)
-        if self.candidate.handle:
-            img = _printwindow_client(self.candidate.handle)
-            if img is not None:
-                return img
-
-        # 2) Screen crop (avec anti-miroir optionnel)
-        withdraw = False
-        if self.anti_mirror.get() and self._intersects_preview(bbox):
-            try:
-                self.withdraw(); withdraw = True; self.update_idletasks()
-            except Exception:
-                pass
         try:
+            bbox = self._current_bbox()
+            if not bbox or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                return None
+
+            # 1) PrintWindow si possible (anti-occlusion/mirror)
             if self.candidate.handle:
-                _ensure_target_visible(self.candidate.handle)
-                time.sleep(0.06)
-            return _capture_bbox(bbox)
-        finally:
-            if withdraw:
+                img = _printwindow_client(self.candidate.handle)
+                if img is not None and img.size[0] > 0 and img.size[1] > 0:
+                    self._last_raw = img  # Stocke pour l'export
+                    return img
+
+            # 2) Screen crop (avec anti-miroir optionnel)
+            withdraw = False
+            if self.anti_mirror.get() and self._intersects_preview(bbox):
                 try:
-                    self.deiconify(); self.update_idletasks()
+                    self.withdraw(); withdraw = True; self.update_idletasks()
                 except Exception:
                     pass
+            try:
+                if self.candidate.handle:
+                    _ensure_target_visible(self.candidate.handle)
+                    time.sleep(0.1)  # Délai augmenté pour la stabilisation
+                img = _capture_bbox(bbox)
+                if img is not None and img.size[0] > 0 and img.size[1] > 0:
+                    self._last_raw = img  # Stocke pour l'export
+                    return img
+                return None
+            finally:
+                if withdraw:
+                    try:
+                        self.deiconify(); self.update_idletasks()
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"Debug: Erreur capture: {e}")
+            return None
 
     # ------------------------- overlay helpers -------------------------
     def _get_anchor_norm(self) -> Tuple[float, float, float, float]:
@@ -410,10 +425,26 @@ class LivePreview(tk.Tk):
     def _loop(self):
         if not self._running:
             return
+        
+        # Contrôle de fréquence pour éviter le clignotement
+        current_time = time.time()
+        if hasattr(self, '_last_update_time'):
+            time_since_last = current_time - self._last_update_time
+            if time_since_last < 0.2:  # Minimum 200ms entre les mises à jour
+                self.after(100, self._loop)
+                return
+        
+        self._last_update_time = current_time
         t0 = time.time()
+
+        # Compteur d'échecs consécutifs
+        if not hasattr(self, '_consecutive_failures'):
+            self._consecutive_failures = 0
 
         raw = self._capture_raw()
         if raw is not None and raw.size[0] > 0 and raw.size[1] > 0:
+            # Reset du compteur d'échecs en cas de succès
+            self._consecutive_failures = 0
             self._last_raw_size = raw.size
             W, H = raw.size
 
@@ -430,23 +461,48 @@ class LivePreview(tk.Tk):
             img = raw if eff_scale == 1.0 else raw.resize((disp_w, disp_h), Image.NEAREST)
 
             # Centrage dans le canvas
-            self._offset_x = max(0, (cw - disp_w) // 2)
-            self._offset_y = max(0, (ch - disp_h) // 2)
+            new_offset_x = max(0, (cw - disp_w) // 2)
+            new_offset_y = max(0, (ch - disp_h) // 2)
+            
+            # Vérifie si l'image ou la position ont changé pour éviter les redraws inutiles
+            image_changed = (not hasattr(self, '_last_image_hash') or 
+                           hash(img.tobytes()) != self._last_image_hash)
+            position_changed = (not hasattr(self, '_offset_x') or 
+                              self._offset_x != new_offset_x or 
+                              self._offset_y != new_offset_y)
+            
+            if image_changed or position_changed:
+                self._offset_x = new_offset_x
+                self._offset_y = new_offset_y
+                self._last_image_hash = hash(img.tobytes())
+                
+                self._photo = ImageTk.PhotoImage(img)
+                self.canvas.delete("all")
+                self.canvas.create_image(self._offset_x, self._offset_y, image=self._photo, anchor=tk.NW)
+                self.canvas.config(scrollregion=(0, 0, max(cw, disp_w), max(ch, disp_h)))
 
-            self._photo = ImageTk.PhotoImage(img)
-            self.canvas.delete("all")
-            self.canvas.create_image(self._offset_x, self._offset_y, image=self._photo, anchor=tk.NW)
-            self.canvas.config(scrollregion=(0, 0, max(cw, disp_w), max(ch, disp_h)))
-
-            # Dessiner overlays
+            # Dessiner overlays (toujours mis à jour)
             self._draw_overlays(disp_w, disp_h)
 
             # FPS
             self._update_fps()
+        else:
+            # Échec de capture - incrémente le compteur
+            self._consecutive_failures += 1
+            
+            # Si trop d'échecs consécutifs, pause plus longue
+            if self._consecutive_failures > 10:
+                print(f"⚠️ {self._consecutive_failures} échecs consécutifs - pause de 2 secondes")
+                self.after(2000, self._loop)  # Pause de 2 secondes
+                return
+            elif self._consecutive_failures > 5:
+                print(f"⚠️ {self._consecutive_failures} échecs consécutifs - pause de 1 seconde")
+                self.after(1000, self._loop)  # Pause de 1 seconde
+                return
 
-        # cadence
+        # cadence - délai minimum augmenté pour éviter le clignotement
         elapsed = time.time() - t0
-        delay = max(20, int((self.target_frame_time - elapsed) * 1000))
+        delay = max(200, int((self.target_frame_time - elapsed) * 1000))  # Minimum 200ms
         self.after(delay, self._loop)
 
     def _draw_overlays(self, disp_w: int, disp_h: int):
@@ -465,8 +521,124 @@ class LivePreview(tk.Tk):
                     self.canvas.create_rectangle(x0, y0, x1, y1, outline="#00d0ff", width=2)
                     if self.show_labels.get():
                         self.canvas.create_text(x0 + 4, y0 + 12, anchor=tk.W, text=name, fill="#00d0ff", font=("Segoe UI", 9, "bold"))
+            
+            # Dessine les zones de rank et suit des cartes
+            if self.show_card_zones.get():
+                self._draw_card_zones(disp_w, disp_h, ox, oy)
         except Exception as e:
             print(f"Debug: Erreur overlays: {e}")
+
+    def _draw_card_zones(self, disp_w: int, disp_h: int, ox: int, oy: int):
+        """Dessine les zones de rank et suit des cartes."""
+        try:
+            if not self.cfg or 'card_zones' not in self.cfg:
+                return
+            
+            card_zones = self.cfg['card_zones']
+            if not card_zones:
+                return
+            
+            # Parcourt toutes les cartes avec leurs zones
+            for card_name, zones in card_zones.items():
+                # Trouve la ROI de la carte dans le layout
+                card_roi = self._get_card_roi(card_name)
+                if not card_roi:
+                    continue
+                
+                # Convertit la ROI de la carte en pixels
+                card_x0, card_y0, card_x1, card_y1 = self._roi_to_pixels(card_roi, disp_w, disp_h)
+                
+                # Dessine chaque zone de la carte
+                for zone_name, zone_config in zones.items():
+                    zone_type = zone_config.get('type', 'unknown')
+                    zone_x = zone_config.get('x', 0)
+                    zone_y = zone_config.get('y', 0)
+                    zone_w = zone_config.get('w', 0)
+                    zone_h = zone_config.get('h', 0)
+                    
+                    # Calcule les coordonnées absolues de la zone
+                    zone_abs_x0 = card_x0 + int(zone_x * (card_x1 - card_x0))
+                    zone_abs_y0 = card_y0 + int(zone_y * (card_y1 - card_y0))
+                    zone_abs_x1 = card_x0 + int((zone_x + zone_w) * (card_x1 - card_x0))
+                    zone_abs_y1 = card_y0 + int((zone_y + zone_h) * (card_y1 - card_y0))
+                    
+                    # Applique l'offset du canvas
+                    zone_abs_x0 += ox
+                    zone_abs_y0 += oy
+                    zone_abs_x1 += ox
+                    zone_abs_y1 += oy
+                    
+                    # Couleur selon le type
+                    if zone_type == 'rank':
+                        color = "#ff4444"  # Rouge pour les rangs
+                        label_color = "#ff6666"
+                    elif zone_type == 'suit':
+                        color = "#44ff44"  # Vert pour les couleurs
+                        label_color = "#66ff66"
+                    else:
+                        color = "#888888"  # Gris pour autres types
+                        label_color = "#aaaaaa"
+                    
+                    # Dessine le rectangle de la zone
+                    self.canvas.create_rectangle(
+                        zone_abs_x0, zone_abs_y0, zone_abs_x1, zone_abs_y1,
+                        outline=color, width=2, dash=(3, 3)
+                    )
+                    
+                    # Ajoute le label si activé
+                    if self.show_labels.get():
+                        label_text = f"{zone_type}"
+                        self.canvas.create_text(
+                            zone_abs_x0 + 2, zone_abs_y0 + 2,
+                            anchor=tk.NW, text=label_text,
+                            fill=label_color, font=("Segoe UI", 8, "bold")
+                        )
+                        
+        except Exception as e:
+            print(f"Debug: Erreur zones cartes: {e}")
+
+    def _get_card_roi(self, card_name: str) -> Optional[Dict[str, float]]:
+        """Récupère la ROI d'une carte depuis le layout."""
+        try:
+            if not self.cfg or 'layouts' not in self.cfg:
+                return None
+            
+            layout = self.cfg['layouts'].get(self.layout, {})
+            rois = layout.get('rois', {})
+            return rois.get(card_name)
+        except Exception:
+            return None
+
+    def _roi_to_pixels(self, roi_config: Dict[str, float], disp_w: int, disp_h: int) -> Tuple[int, int, int, int]:
+        """Convertit une ROI en coordonnées pixels."""
+        try:
+            x = roi_config.get('x', 0)
+            y = roi_config.get('y', 0)
+            w = roi_config.get('w', 0)
+            h = roi_config.get('h', 0)
+            
+            if self.relative_to_var.get() == "table_zone":
+                # Coordonnées relatives à table_zone
+                ax, ay, aw, ah = self._get_anchor_norm()
+                x0 = int((ax + x * aw) * disp_w)
+                y0 = int((ay + y * ah) * disp_h)
+                x1 = int((ax + (x + w) * aw) * disp_w)
+                y1 = int((ay + (y + h) * ah) * disp_h)
+            else:
+                # Coordonnées relatives au client
+                client_size = self.cfg.get('client_size', {'w': 1376, 'h': 1040})
+                ref_w, ref_h = client_size['w'], client_size['h']
+                scale_x = disp_w / ref_w
+                scale_y = disp_h / ref_h
+                
+                x0 = int(x * ref_w * scale_x)
+                y0 = int(y * ref_h * scale_y)
+                x1 = int((x + w) * ref_w * scale_x)
+                y1 = int((y + h) * ref_h * scale_y)
+            
+            return x0, y0, x1, y1
+        except Exception:
+            return 0, 0, 0, 0
 
     def _update_fps(self):
         try:
@@ -477,6 +649,224 @@ class LivePreview(tk.Tk):
                 self.fps_label.config(text=f"{fps:.1f} fps")
         except Exception:
             pass
+
+    # ------------------------- export cartes -------------------------
+    def _export_cards(self):
+        """Exporte les cartes détectées en PNG dans un sous-dossier daté."""
+        try:
+            # Recapture ou utilise la dernière image
+            if self._last_raw is None:
+                self._capture_raw()
+            
+            if self._last_raw is None:
+                messagebox.showerror("Export", "Aucune image disponible pour l'export")
+                return
+            
+            # Détecte les ROIs de cartes
+            card_rois = self._get_card_rois()
+            if not card_rois:
+                messagebox.showwarning("Export", "Aucune carte détectée dans le YAML")
+                return
+            
+            # Crée le dossier d'export
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            export_dir = f"exported_cards_{timestamp}"
+            os.makedirs(export_dir, exist_ok=True)
+            
+            # Exporte chaque carte
+            exported_count = 0
+            for roi_name, roi_px in card_rois.items():
+                try:
+                    # Applique l'inflate si défini
+                    inflated_roi = self._apply_roi_inflate(roi_name, roi_px)
+                    
+                    # Crop la carte
+                    card_img = self._crop_roi(self._last_raw, inflated_roi)
+                    if card_img is None:
+                        continue
+                    
+                    # Sauvegarde
+                    filename = f"{roi_name}.png"
+                    filepath = os.path.join(export_dir, filename)
+                    card_img.save(filepath, "PNG")
+                    exported_count += 1
+                    
+                except Exception as e:
+                    print(f"Erreur export {roi_name}: {e}")
+                    continue
+            
+            if exported_count > 0:
+                messagebox.showinfo("Export", f"{exported_count} cartes exportées dans:\n{os.path.abspath(export_dir)}")
+            else:
+                messagebox.showwarning("Export", "Aucune carte n'a pu être exportée")
+                
+        except Exception as e:
+            messagebox.showerror("Export", f"Erreur lors de l'export:\n{e}")
+    
+    def _get_card_rois(self) -> Dict[str, Tuple[int, int, int, int]]:
+        """Retourne les ROIs de cartes en pixels."""
+        card_rois = {}
+        
+        # Récupère le layout actuel
+        layout_name = self.layout_var.get()
+        layouts = self.cfg.get("layouts", {})
+        if layout_name not in layouts:
+            return card_rois
+        
+        layout = layouts[layout_name]
+        rois = layout.get("rois", {})
+        
+        # Détecte les cartes par type ou regex sur le nom
+        for roi_name, roi_config in rois.items():
+            # Vérifie si c'est une carte par type
+            if isinstance(roi_config, dict) and roi_config.get("type") == "card":
+                roi_px = self._roi_to_pixels(roi_config)
+                if roi_px:
+                    card_rois[roi_name] = roi_px
+            # Sinon vérifie par regex sur le nom
+            elif self._is_card_roi_name(roi_name):
+                roi_px = self._roi_to_pixels(roi_config)
+                if roi_px:
+                    card_rois[roi_name] = roi_px
+        
+        return card_rois
+    
+    def _is_card_roi_name(self, name: str) -> bool:
+        """Détermine si un nom de ROI correspond à une carte."""
+        import re
+        # Patterns pour détecter les cartes
+        card_patterns = [
+            r'board_card\d+',  # board_card1, board_card2, etc.
+            r'hero_cards_(left|right)',  # hero_cards_left, hero_cards_right
+            r'.*card.*',  # tout nom contenant "card"
+        ]
+        
+        for pattern in card_patterns:
+            if re.search(pattern, name, re.IGNORECASE):
+                return True
+        return False
+    
+    def _roi_to_pixels(self, roi_config: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
+        """Convertit une ROI normalisée en pixels selon la base choisie."""
+        try:
+            if isinstance(roi_config, dict):
+                x = roi_config.get("x", 0.0)
+                y = roi_config.get("y", 0.0)
+                w = roi_config.get("w", 0.0)
+                h = roi_config.get("h", 0.0)
+            else:
+                # Format tuple/list
+                x, y, w, h = roi_config
+            
+            # Convertit selon la base
+            base = self.relative_to_var.get()
+            if base == "table_zone":
+                # Convertit via table_zone
+                anchor_x, anchor_y, anchor_w, anchor_h = self._get_anchor_pixels()
+                px_x = int(anchor_x + x * anchor_w)
+                px_y = int(anchor_y + y * anchor_h)
+                px_w = int(w * anchor_w)
+                px_h = int(h * anchor_h)
+            else:
+                # Convertit via client
+                client_w, client_h = self._get_client_size()
+                px_x = int(x * client_w)
+                px_y = int(y * client_h)
+                px_w = int(w * client_w)
+                px_h = int(h * client_h)
+            
+            return (px_x, px_y, px_w, px_h)
+            
+        except Exception as e:
+            print(f"Erreur conversion ROI: {e}")
+            return None
+    
+    def _get_anchor_pixels(self) -> Tuple[int, int, int, int]:
+        """Retourne les coordonnées de table_zone en pixels."""
+        try:
+            anchors = self.cfg.get("anchors", {})
+            table_zone = anchors.get("table_zone", {})
+            
+            x = table_zone.get("x", 0.0)
+            y = table_zone.get("y", 0.0)
+            w = table_zone.get("w", 1.0)
+            h = table_zone.get("h", 1.0)
+            
+            client_w, client_h = self._get_client_size()
+            px_x = int(x * client_w)
+            px_y = int(y * client_h)
+            px_w = int(w * client_w)
+            px_h = int(h * client_h)
+            
+            return (px_x, px_y, px_w, px_h)
+            
+        except Exception:
+            # Fallback: utilise tout le client
+            client_w, client_h = self._get_client_size()
+            return (0, 0, client_w, client_h)
+    
+    def _get_client_size(self) -> Tuple[int, int]:
+        """Retourne la taille du client en pixels."""
+        try:
+            client_size = self.cfg.get("client_size", {})
+            w = client_size.get("w", 1376)
+            h = client_size.get("h", 1040)
+            return (w, h)
+        except Exception:
+            return (1376, 1040)  # Valeur par défaut
+    
+    def _apply_roi_inflate(self, roi_name: str, roi_px: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
+        """Applique un inflate à une ROI si défini dans le YAML."""
+        try:
+            # Cherche une configuration d'inflate pour cette ROI
+            layout_name = self.layout_var.get()
+            layouts = self.cfg.get("layouts", {})
+            if layout_name not in layouts:
+                return roi_px
+            
+            layout = layouts[layout_name]
+            rois = layout.get("rois", {})
+            roi_config = rois.get(roi_name, {})
+            
+            if isinstance(roi_config, dict):
+                inflate = roi_config.get("inflate", 0)
+                if inflate > 0:
+                    x, y, w, h = roi_px
+                    # Applique l'inflate en pixels
+                    base = self.relative_to_var.get()
+                    if base == "table_zone":
+                        anchor_w, anchor_h = self._get_anchor_pixels()[2:4]
+                        px_inflate = int(inflate * min(anchor_w, anchor_h))
+                    else:
+                        client_w, client_h = self._get_client_size()
+                        px_inflate = int(inflate * min(client_w, client_h))
+                    
+                    return (x - px_inflate, y - px_inflate, w + 2*px_inflate, h + 2*px_inflate)
+            
+            return roi_px
+            
+        except Exception as e:
+            print(f"Erreur inflate ROI {roi_name}: {e}")
+            return roi_px
+    
+    def _crop_roi(self, img: Image.Image, roi_px: Tuple[int, int, int, int]) -> Optional[Image.Image]:
+        """Crop une région d'image selon les coordonnées pixels."""
+        try:
+            x, y, w, h = roi_px
+            img_w, img_h = img.size
+            
+            # Assure que les coordonnées sont dans les limites
+            x = max(0, min(x, img_w))
+            y = max(0, min(y, img_h))
+            w = max(1, min(w, img_w - x))
+            h = max(1, min(h, img_h - y))
+            
+            return img.crop((x, y, x + w, y + h))
+            
+        except Exception as e:
+            print(f"Erreur crop ROI: {e}")
+            return None
 
     # ------------------------- divers -------------------------
     def _request_redraw(self):
