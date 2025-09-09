@@ -77,7 +77,7 @@ PRESET_NAMES: List[str] = [
     # Hero
     "hero_cards_left", "hero_cards_right", "hero_stack", "hero_name", "hero_action_buttons",
     # Pot & info
-    "pot_value", "pot_label", "hand_number", "room_timer",
+    "pot_combined", "hand_number", "room_timer",
     # Villains (exemple 6-max)
     "v1_stack", "v1_name", "v1_bet", "v2_stack", "v2_name", "v2_bet",
     "v3_stack", "v3_name", "v3_bet", "v4_stack", "v4_name", "v4_bet", "v5_stack", "v5_name", "v5_bet",

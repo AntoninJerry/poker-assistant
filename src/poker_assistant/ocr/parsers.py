@@ -111,10 +111,10 @@ def parse_from_rois(
         to_call = None
         board = None
         
-        # Parsing du pot
-        if "pot_value" in rois_img:
+        # Parsing du pot (utilise uniquement pot_combined)
+        if "pot_combined" in rois_img:
             pot_text = read_text(
-                rois_img["pot_value"], 
+                rois_img["pot_combined"], 
                 allowlist="0123456789kK€.,"
             )
             pot = _parse_money(pot_text)

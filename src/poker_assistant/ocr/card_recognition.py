@@ -421,10 +421,11 @@ class CardRecognitionPipeline:
             return float(np.std(img)) if img is not None and img.size else 0.0
 
         r_std = _std(rank_zone); s_std = _std(suit_zone)
-        if rank_zone is None or r_std < 1.2:
-            print(f"⚠️ rank_zone vide/faible pour {card_name} (std={r_std:.2f})")
-        if suit_zone is None or s_std < 1.2:
-            print(f"⚠️ suit_zone vide/faible pour {card_name} (std={s_std:.2f})")
+        # Log silencieux - pas de spam dans la console
+        # if rank_zone is None or r_std < 1.2:
+        #     print(f"⚠️ rank_zone vide/faible pour {card_name} (std={r_std:.2f})")
+        # if suit_zone is None or s_std < 1.2:
+        #     print(f"⚠️ suit_zone vide/faible pour {card_name} (std={s_std:.2f})")
 
         def _edgeize(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if img is None or img.size == 0:
