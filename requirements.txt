@@ -1,0 +1,19 @@
+# Dépendances principales
+opencv-python>=4.8.0
+numpy>=1.24.0
+PyYAML>=6.0
+customtkinter>=5.2.0
+Pillow>=10.0.0
+
+# OCR et reconnaissance
+easyocr>=1.7.0
+
+# Capture d'écran et gestion de fenêtres
+mss>=9.0.0
+pywin32>=306
+
+# Interface utilisateur
+tkinter-tooltip>=2.0.0
+
+# Utilitaires
+pathlib2>=2.3.7

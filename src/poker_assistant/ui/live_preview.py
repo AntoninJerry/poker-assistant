@@ -154,7 +154,7 @@ class LivePreview(tk.Tk):
         candidate: CandidateWindow,
         yaml_path: Optional[str] = None,
         layout: str = "default",
-        relative_to: str = "client",  # "client" ou "table_zone"
+        relative_to: str = "client",  # forcé en client pour cohérence
         track_move: bool = True,
         target_fps: int = 20,
         scale: float = 1.0,
@@ -194,7 +194,7 @@ class LivePreview(tk.Tk):
         self.cfg: Dict[str, Any] = {}
         self.yaml_path = yaml_path
         self.layout_var = tk.StringVar(value=layout)
-        self.relative_to_var = tk.StringVar(value=relative_to)
+        self.relative_to_var = tk.StringVar(value="client")
 
         # Intégration de la reconnaissance
         self.recognition_integration: Optional[RecognitionIntegration] = None

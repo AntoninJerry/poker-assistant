@@ -55,6 +55,11 @@ class RecognitionIntegration:
                 yaml_path=self.yaml_path,
                 templates_dir=self.templates_dir
             )
+            # Forcer la même base que le YAML (client par défaut)
+            try:
+                self.pipeline.set_relative_to("client")
+            except Exception:
+                pass
             print("✅ Pipeline de reconnaissance initialisé")
             return True
         except Exception as e:
@@ -188,11 +193,16 @@ class RecognitionIntegration:
             return "?? ?? ?? ?? ??"
         
         board_str = ""
-        for card in self.last_recognition.board_cards:
+        for i, card in enumerate(self.last_recognition.board_cards):
             if card.rank and card.suit:
                 board_str += f"{card.rank}{card.suit} "
             else:
                 board_str += "?? "
+        
+        # Debug: affiche les détails des cartes du board
+        print(f"🔍 Board display: {board_str.strip()}")
+        for i, card in enumerate(self.last_recognition.board_cards):
+            print(f"  Board[{i}]: rank={card.rank}, suit={card.suit}, uncertain={card.is_uncertain}")
         
         return board_str.strip()
     

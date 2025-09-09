@@ -1,5 +1,7 @@
 room: winamax
 version: 2
+coords:
+  base: client  # ou "table" si vous travaillez dans anchors.table_zone
 scaling:
   mode: normalized
   dpi_compensation: true
