@@ -145,6 +145,11 @@ test_preprocessing.py
 test_card_recognition.py
 compare_templates.py
 
+# Dossiers de debug OCR temporaires
+debug_ocr/
+test_debug_ocr/
+test_ocr_logs/
+
 # IDE
 .vscode/
 .idea/
