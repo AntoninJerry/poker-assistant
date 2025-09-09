@@ -40,6 +40,13 @@ except ImportError:
     print("⚠️ Module de reconnaissance non disponible")
 
 try:
+    from poker_assistant.ocr.text_recognition import TextRecognitionPipeline
+    TEXT_OCR_AVAILABLE = True
+except Exception:
+    TextRecognitionPipeline = None  # type: ignore
+    TEXT_OCR_AVAILABLE = False
+
+try:
     import mss  # capture écran rapide
 except ImportError:
     mss = None
@@ -198,6 +205,7 @@ class LivePreview(tk.Tk):
 
         # Intégration de la reconnaissance
         self.recognition_integration: Optional[RecognitionIntegration] = None
+        self.text_pipeline = None
         if RECOGNITION_AVAILABLE and yaml_path:
             try:
                 self.recognition_integration = RecognitionIntegration(
@@ -208,6 +216,12 @@ class LivePreview(tk.Tk):
             except Exception as e:
                 print(f"⚠️ Erreur intégration reconnaissance: {e}")
                 self.recognition_integration = None
+        if TEXT_OCR_AVAILABLE and yaml_path:
+            try:
+                self.text_pipeline = TextRecognitionPipeline(yaml_path=yaml_path)
+                print("✅ Pipeline OCR texte prêt")
+            except Exception as e:
+                print(f"⚠️ Erreur pipeline OCR texte: {e}")
 
         # UI d'abord
         self._build_ui()
@@ -248,6 +262,8 @@ class LivePreview(tk.Tk):
         ttk.Checkbutton(top, text="Noms", variable=self.show_labels, command=self._request_redraw).pack(side="left", padx=(4, 2))
         ttk.Checkbutton(top, text="Afficher table_zone", variable=self.show_table_zone, command=self._request_redraw).pack(side="left", padx=(4, 2))
         ttk.Checkbutton(top, text="Zones Cartes", variable=self.show_card_zones, command=self._request_redraw).pack(side="left", padx=(4, 2))
+        self.show_text_zones = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="Zones OCR", variable=self.show_text_zones, command=self._request_redraw).pack(side="left", padx=(4, 2))
         ttk.Checkbutton(top, text="Anti-miroir", variable=self.anti_mirror).pack(side="left", padx=(8, 2))
         ttk.Checkbutton(top, text="Fit à la fenêtre", variable=self.fit_to_window, command=self._request_redraw).pack(side="left", padx=(8, 2))
 
@@ -457,7 +473,7 @@ class LivePreview(tk.Tk):
     def _loop(self):
         if not self._running:
             return
-        
+
         # Contrôle de fréquence pour éviter le clignotement
         current_time = time.time()
         if hasattr(self, '_last_update_time'):
@@ -526,7 +542,7 @@ class LivePreview(tk.Tk):
                 self.canvas.config(scrollregion=(0, 0, max(cw, disp_w), max(ch, disp_h)))
 
             # Dessiner overlays (toujours mis à jour)
-            self._draw_overlays(disp_w, disp_h)
+            self._draw_overlays(disp_w, disp_h, raw, eff_scale)
 
             # FPS
             self._update_fps()
@@ -549,7 +565,7 @@ class LivePreview(tk.Tk):
         delay = max(200, int((self.target_frame_time - elapsed) * 1000))  # Minimum 200ms
         self.after(delay, self._loop)
 
-    def _draw_overlays(self, disp_w: int, disp_h: int):
+    def _draw_overlays(self, disp_w: int, disp_h: int, raw_img: Image.Image, eff_scale: float):
         try:
             ox, oy = self._offset_x, self._offset_y
             if self.show_table_zone.get():
@@ -569,6 +585,26 @@ class LivePreview(tk.Tk):
             # Dessine les zones de rank et suit des cartes
             if self.show_card_zones.get():
                 self._draw_card_zones(disp_w, disp_h, ox, oy)
+
+            # Dessine les zones OCR texte (jaune)
+            if self.show_text_zones.get() and self.text_pipeline is not None:
+                try:
+                    # Utilise le frame brut pour obtenir les rects en px
+                    frame_bgr = None
+                    if 'cv2' in globals():
+                        frame_bgr = cv2.cvtColor(np.array(raw_img), cv2.COLOR_RGB2BGR)
+                    rects = self.text_pipeline.get_text_zone_rects(frame_bgr if frame_bgr is not None else np.array(raw_img))
+                    for name, (x0, y0, x1, y1) in rects.items():
+                        # Mise à l'échelle + offset
+                        sx0 = int(x0 * eff_scale) + ox
+                        sy0 = int(y0 * eff_scale) + oy
+                        sx1 = int(x1 * eff_scale) + ox
+                        sy1 = int(y1 * eff_scale) + oy
+                        self.canvas.create_rectangle(sx0, sy0, sx1, sy1, outline="#ffd000", width=2, dash=(4, 3))
+                        if self.show_labels.get():
+                            self.canvas.create_text(sx0 + 4, sy0 + 12, anchor=tk.W, text=name, fill="#ffd000", font=("Segoe UI", 9, "bold"))
+                except Exception as e:
+                    print(f"Debug: Erreur zones OCR: {e}")
         except Exception as e:
             print(f"Debug: Erreur overlays: {e}")
 
@@ -1156,7 +1192,7 @@ def show_live_preview(
 
 if __name__ == "__main__":
     try:
-        from windows.detector import detect_poker_tables
+        from poker_assistant.windows.detector import detect_poker_tables
         cands = detect_poker_tables("winamax")
         if cands:
             show_live_preview(cands[0], yaml_path="rooms/winamax.yaml", relative_to="table_zone")
