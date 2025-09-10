@@ -79,3 +79,48 @@ def crop_bgr(frame_bgr: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarr
         raise CaptureError(f"Région de découpage invalide: {rect}")
     
     return frame_bgr[y0:y1, x0:x1]
+
+
+class ScreenCapture:
+    """Classe simple pour la capture d'écran de fenêtres."""
+    
+    def __init__(self):
+        """Initialise la capture d'écran."""
+        if not mss:
+            raise CaptureError("Module mss non disponible pour la capture d'écran")
+    
+    def capture_window(self, handle: int) -> np.ndarray:
+        """Capture une fenêtre par son handle.
+        
+        Args:
+            handle: Handle de la fenêtre Windows
+            
+        Returns:
+            Image de la fenêtre en format BGR, ou None si échec
+        """
+        try:
+            import win32gui
+            import win32ui
+            import win32con
+            
+            # Obtenir les dimensions de la fenêtre
+            rect = win32gui.GetWindowRect(handle)
+            x, y, right, bottom = rect
+            width = right - x
+            height = bottom - y
+            
+            if width <= 0 or height <= 0:
+                return None
+            
+            # Capture avec mss
+            with mss.mss() as sct:
+                monitor = {"left": x, "top": y, "width": width, "height": height}
+                raw = sct.grab(monitor)
+            
+            # Conversion en numpy array BGR
+            img = np.array(raw)
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            
+        except Exception as e:
+            print(f"⚠️ Erreur capture fenêtre {handle}: {e}")
+            return None

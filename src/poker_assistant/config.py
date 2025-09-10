@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, TypedDict
 
@@ -106,3 +107,19 @@ def load_room_config(name: str, settings: Optional[AppSettings] = None) -> RoomC
         ],
     )
     return cfg
+
+
+@dataclass
+class LLMConfig:
+    """Configuration pour l'intégration LLM (Ollama)."""
+    enabled: bool = True
+    model: str = "llama3.1:8b"
+    host: str = "http://localhost:11434"
+    timeout_s: float = 15.0
+    temperature: float = 0.2
+    top_p: float = 0.9
+    max_tokens: int = 256
+
+
+# Instance globale de configuration LLM
+LLM_CFG = LLMConfig()

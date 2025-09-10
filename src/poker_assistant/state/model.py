@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Literal
 from pydantic import BaseModel, Field, validator
 
 
@@ -211,3 +211,55 @@ ROOM_SCHEMA = {
         }
     }
 }
+
+
+# ============================================================================
+# NOUVEAUX MODÈLES POUR L'INTÉGRATION LLM
+# ============================================================================
+
+Street = Literal["preflop", "flop", "turn", "river"]
+
+
+@dataclass
+class HandState:
+    """État de la main pour l'analyse LLM."""
+    street: Street
+    hero_cards: List[str]             # ex: ["Ah","Kd"]
+    board: List[str]                  # taille 0..5
+    pot: Optional[float]              # en € ou chips (cohérent partout)
+    to_call: Optional[float]
+    hero_stack: Optional[float]
+    bb: float                         # big blind
+    hero_name: Optional[str] = None
+    history: Optional[List[Dict]] = None        # [{"pos":"BTN","act":"open","size_bb":2.5},...]
+    ts_ms: Optional[int] = None
+
+
+def infer_street(board: List[str]) -> Street:
+    """Infère la street basée sur le nombre de cartes du board."""
+    n = len([c for c in board if c and c != "??"])
+    return ["preflop", "flop", "turn", "river"][min(max((0, 3, 4, 5).index(next(x for x in (0, 3, 4, 5) if n <= x)), 0), 3)]
+
+
+# ============================================================================
+# UTILITAIRES POUR L'ANALYSE STRATÉGIQUE
+# ============================================================================
+
+def as_bb(amount: Optional[float], bb: float) -> Optional[float]:
+    """Convertit un montant en big blinds."""
+    return None if (amount is None or bb <= 0) else (amount / bb)
+
+
+def pot_odds(to_call: Optional[float], pot: Optional[float]) -> Optional[float]:
+    """Calcule les pot odds (to_call / (pot + to_call))."""
+    if to_call is None or pot is None:
+        return None
+    denom = pot + to_call
+    return None if denom <= 1e-9 else (to_call / denom)
+
+
+def spr(hero_stack: Optional[float], pot: Optional[float]) -> Optional[float]:
+    """Calcule le Stack-to-Pot Ratio (SPR)."""
+    if hero_stack is None or pot is None or pot <= 1e-9:
+        return None
+    return hero_stack / pot

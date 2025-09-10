@@ -17,3 +17,4 @@ tkinter-tooltip>=2.0.0
 
 # Utilitaires
 pathlib2>=2.3.7
+requests>=2.31.0

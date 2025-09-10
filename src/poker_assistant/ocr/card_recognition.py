@@ -63,16 +63,26 @@ class CardRecognitionPipeline:
         self.yaml_path = yaml_path
         self.templates_dir = Path(templates_dir)
         
-        # Configuration
-        self.target_size = (56, 56)  # Taille cible pour le prétraitement
+        # Configuration optimisée pour la sensibilité (rollback aux paramètres initiaux)
+        self.target_size = (40, 40)  # Taille réduite pour plus de rapidité
         self.confidence_alpha = 2.0   # Paramètre sigmoid (augmenté pour plus de précision)
         self.confidence_beta = 1.5    # Paramètre margin (augmenté)
-        self.confidence_threshold = 0.3  # Seuil un peu plus haut pour limiter les faux positifs
-        self.temporal_buffer_size = 3     # Taille du buffer temporel (réduit pour plus de réactivité)
-        # Gardes anti-faux positifs
-        self.min_top1_score = 0.35       # score brut minimal du top1 pour considérer un label
-        self.min_top1_margin = 0.07      # marge (top1-top2) minimale
-        self.min_roi_activity = 2.0      # écart-type minimal dans la zone (texture) - plus tolérant
+        self.confidence_threshold = 0.2  # 20% minimum (sensibilité maximale)
+        self.temporal_buffer_size = 1     # Buffer temporel minimal pour plus de réactivité
+        # Gardes anti-faux positifs sensibles
+        self.min_top1_score = 0.25       # 25% (sensibilité maximale)
+        self.min_top1_margin = 0.03      # 3% de marge (sensibilité maximale)
+        self.min_roi_activity = 1.5      # écart-type minimal réduit
+        
+        # Seuils différenciés par type de carte (sensibles)
+        self.hero_min_score = 0.15          # 15% minimum pour les cartes Hero (très sensible)
+        self.hero_min_margin = 0.02        # 2% de marge pour les cartes Hero (très sensible)
+        self.board_min_score = 0.12         # 12% minimum pour les cartes Board (très sensible)
+        self.board_min_margin = 0.01       # 1% de marge pour les cartes Board (très sensible)
+        
+        # Configuration du pré-traitement adaptatif
+        self.use_aggressive_preprocessing = True  # Active le pré-traitement agressif si nécessaire
+        self.preprocessing_fallback_threshold = 0.1  # Seuil très bas pour basculer vers le pré-traitement agressif
         
         # Debug dump pour inspection visuelle des crops
         self.debug_dump = False
@@ -101,6 +111,16 @@ class CardRecognitionPipeline:
         
         # Pipeline de reconnaissance textuelle
         self.text_pipeline = TextRecognitionPipeline(yaml_path)
+        
+        # Log des seuils de confiance (rollback vers sensibilité maximale)
+        print(f"🎯 ROLLBACK: Seuils de confiance sensibles activés:")
+        print(f"   📊 Confiance globale: {self.confidence_threshold:.1%}")
+        print(f"   🃏 Cartes Hero: score≥{self.hero_min_score:.1%}, marge≥{self.hero_min_margin:.1%}")
+        print(f"   🃏 Cartes Board: score≥{self.board_min_score:.1%}, marge≥{self.board_min_margin:.1%}")
+        print(f"   🔍 Score minimal brut: {self.min_top1_score:.1%}, marge: {self.min_top1_margin:.1%}")
+        print(f"   🚀 Pré-traitement adaptatif: {'Activé' if self.use_aggressive_preprocessing else 'Désactivé'}")
+        print(f"   📈 Seuil fallback: {self.preprocessing_fallback_threshold:.1%}")
+        print(f"   ⚠️  Mode haute sensibilité - risque de faux positifs mais détection maximale")
         
     def _load_config(self):
         """Charge la configuration depuis le YAML."""
@@ -163,22 +183,55 @@ class CardRecognitionPipeline:
     
     def _preprocess_image(self, img: np.ndarray) -> np.ndarray:
         """
-        Prétraitement identique pour templates et ROIs.
+        Prétraitement optimisé pour templates et ROIs avec amélioration de contraste.
         
         Args:
             img: Image en niveaux de gris
             
         Returns:
-            Image prétraitée
+            Image prétraitée optimisée
         """
         # Redimensionne à la taille cible
         img_resized = cv2.resize(img, self.target_size)
         
-        # Flou gaussien pour réduire le bruit
-        img_blurred = cv2.GaussianBlur(img_resized, (3, 3), 0)
+        # Amélioration du contraste avec CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img_enhanced = clahe.apply(img_resized)
         
-        # Retourne l'image floutée (plus robuste que Canny pour les cartes)
-        return img_blurred
+        # Flou gaussien léger pour réduire le bruit sans perdre les détails
+        img_blurred = cv2.GaussianBlur(img_enhanced, (3, 3), 0.5)
+        
+        # Normalisation pour améliorer la robustesse
+        img_normalized = cv2.normalize(img_blurred, None, 0, 255, cv2.NORM_MINMAX)
+        
+        return img_normalized
+    
+    def _preprocess_image_aggressive(self, img: np.ndarray) -> np.ndarray:
+        """
+        Prétraitement agressif pour les cas difficiles (faible contraste).
+        
+        Args:
+            img: Image en niveaux de gris
+            
+        Returns:
+            Image prétraitée avec amélioration agressive
+        """
+        # Redimensionne à la taille cible
+        img_resized = cv2.resize(img, self.target_size)
+        
+        # CLAHE plus agressif
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+        img_enhanced = clahe.apply(img_resized)
+        
+        # Filtre morphologique pour nettoyer l'image
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        img_morph = cv2.morphologyEx(img_enhanced, cv2.MORPH_CLOSE, kernel)
+        
+        # Seuillage adaptatif pour binariser
+        img_thresh = cv2.adaptiveThreshold(img_morph, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                          cv2.THRESH_BINARY, 11, 2)
+        
+        return img_thresh
     
     def _init_temporal_buffers(self):
         """Initialise les buffers temporels."""
@@ -427,15 +480,23 @@ class CardRecognitionPipeline:
         # if suit_zone is None or s_std < 1.2:
         #     print(f"⚠️ suit_zone vide/faible pour {card_name} (std={s_std:.2f})")
 
-        def _edgeize(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        def _enhance_low_contrast(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
+            """Améliore les zones à faible contraste avec pré-traitement adaptatif."""
             if img is None or img.size == 0:
                 return None
-            return cv2.Canny(img, 50, 120)
+            
+            # Utilise le pré-traitement agressif pour les zones difficiles
+            if self.use_aggressive_preprocessing:
+                return self._preprocess_image_aggressive(img)
+            else:
+                # Fallback vers Canny si le pré-traitement agressif est désactivé
+                return cv2.Canny(img, 50, 120)
 
+        # Améliore les zones à faible contraste
         if r_std < 1.2 and rank_zone is not None:
-            rank_zone = _edgeize(rank_zone)
+            rank_zone = _enhance_low_contrast(rank_zone)
         if s_std < 1.2 and suit_zone is not None:
-            suit_zone = _edgeize(suit_zone)
+            suit_zone = _enhance_low_contrast(suit_zone)
 
         return rank_zone, suit_zone
     
@@ -467,7 +528,7 @@ class CardRecognitionPipeline:
     
     def _template_matching_multi_variants(self, roi: np.ndarray, templates: Dict[str, np.ndarray]) -> Dict[str, float]:
         """
-        Template matching multi-variants pour un ROI.
+        Template matching multi-variants avec pré-traitement adaptatif.
         
         Args:
             roi: ROI à analyser
@@ -478,21 +539,47 @@ class CardRecognitionPipeline:
         """
         scores = {}
         
-        # Prétraite le ROI
+        # Prétraitement standard
         roi_processed = self._preprocess_image(roi)
         
-        # Pour chaque label, teste le template
+        # Test initial avec pré-traitement standard
+        initial_scores = {}
         for label, template in templates.items():
             try:
-                # Template matching
                 result = cv2.matchTemplate(roi_processed, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, _ = cv2.minMaxLoc(result)
-                
-                scores[label] = max_val
-                
+                initial_scores[label] = max_val
             except Exception as e:
-                print(f"⚠️ Erreur template matching {label}: {e}")
-                scores[label] = 0.0
+                initial_scores[label] = 0.0
+        
+        # Vérifie si le meilleur score est suffisant
+        best_score = max(initial_scores.values()) if initial_scores else 0.0
+        
+        # Si le score est trop faible et que le pré-traitement agressif est activé
+        if (best_score < self.preprocessing_fallback_threshold and 
+            self.use_aggressive_preprocessing):
+            
+            # Prétraitement agressif
+            roi_aggressive = self._preprocess_image_aggressive(roi)
+            
+            # Test avec pré-traitement agressif
+            aggressive_scores = {}
+            for label, template in templates.items():
+                try:
+                    # Prétraite aussi le template pour la cohérence
+                    template_processed = self._preprocess_image_aggressive(template)
+                    result = cv2.matchTemplate(roi_aggressive, template_processed, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(result)
+                    aggressive_scores[label] = max_val
+                except Exception as e:
+                    aggressive_scores[label] = 0.0
+            
+            # Prend le meilleur score entre standard et agressif
+            for label in templates.keys():
+                scores[label] = max(initial_scores.get(label, 0.0), 
+                                 aggressive_scores.get(label, 0.0))
+        else:
+            scores = initial_scores
         
         return scores
 
@@ -722,19 +809,22 @@ class CardRecognitionPipeline:
             suit_main, s_top1, s_margin = self._choose_family_with_margin(suit_fam)
             
             if self.verbose:
-                print(f"🏆 {card_name}: rank={rank_main}({r_top1:.3f}±{r_margin:.3f}), suit={suit_main}({s_top1:.3f}±{s_margin:.3f})")
+                card_type = "BOARD" if is_board_card else "HERO"
+                min_score = self.board_min_score if is_board_card else self.hero_min_score
+                min_margin = self.board_min_margin if is_board_card else self.hero_min_margin
+                print(f"🏆 {card_name} ({card_type}): rank={rank_main}({r_top1:.3f}±{r_margin:.3f}), suit={suit_main}({s_top1:.3f}±{s_margin:.3f}) [seuils: {min_score:.2f}/{min_margin:.2f}]")
 
-            # 4) Seuils différenciés : plus tolérants pour le board
+            # 4) Seuils différenciés stricts : Hero très précis, Board plus tolérant
             is_board_card = 'board' in card_name.lower()
             
             if is_board_card:
-                # Seuils très tolérants pour les cartes du board
-                rank_valid = (r_top1 >= max(0.12, self.min_top1_score - 0.25)) and (r_margin >= max(0.01, self.min_top1_margin - 0.08))
-                suit_valid = (s_top1 >= max(0.12, self.min_top1_score - 0.25)) and (s_margin >= max(0.01, self.min_top1_margin - 0.08))
+                # Seuils pour les cartes du board (plus tolérantes)
+                rank_valid = (r_top1 >= self.board_min_score) and (r_margin >= self.board_min_margin)
+                suit_valid = (s_top1 >= self.board_min_score) and (s_margin >= self.board_min_margin)
             else:
-                # Seuils normaux pour les cartes hero
-                rank_valid = (r_top1 >= max(0.15, self.min_top1_score - 0.20)) and (r_margin >= max(0.02, self.min_top1_margin - 0.05))
-                suit_valid = (s_top1 >= max(0.15, self.min_top1_score - 0.20)) and (s_margin >= max(0.01, self.min_top1_margin - 0.06))
+                # Seuils stricts pour les cartes hero (très précises)
+                rank_valid = (r_top1 >= self.hero_min_score) and (r_margin >= self.hero_min_margin)
+                suit_valid = (s_top1 >= self.hero_min_score) and (s_margin >= self.hero_min_margin)
             
             if self.verbose:
                 print(f"✅ {card_name}: rank_valid={rank_valid}, suit_valid={suit_valid}")

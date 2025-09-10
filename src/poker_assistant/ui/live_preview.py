@@ -39,6 +39,16 @@ except ImportError:
     RECOGNITION_AVAILABLE = False
     print("⚠️ Module de reconnaissance non disponible")
 
+# Import de l'état de jeu et de la stratégie
+try:
+    from poker_assistant.state.model import HandState, infer_street
+    from poker_assistant.strategy.engine import ask_policy
+    from poker_assistant.strategy.providers.typing_ext import PolicyDict
+    STRATEGY_AVAILABLE = True
+except ImportError:
+    STRATEGY_AVAILABLE = False
+    print("⚠️ Module de stratégie non disponible")
+
 try:
     from poker_assistant.ocr.text_recognition import TextRecognitionPipeline
     TEXT_OCR_AVAILABLE = True
@@ -50,6 +60,55 @@ try:
     import mss  # capture écran rapide
 except ImportError:
     mss = None
+
+
+def build_state_from_outputs(ocr_results: Dict[str, Any], cards: Dict[str, Any], bb_value: float) -> Optional[HandState]:
+    """
+    Construit un HandState à partir des résultats OCR et de reconnaissance de cartes.
+    
+    Args:
+        ocr_results: Résultats de l'OCR textuel
+        cards: Résultats de la reconnaissance de cartes
+        bb_value: Valeur de la big blind
+        
+    Returns:
+        HandState ou None si les données sont insuffisantes
+    """
+    if not STRATEGY_AVAILABLE:
+        return None
+    
+    try:
+        # Extraction des cartes du board
+        board = [c for c in cards.get("board", []) if c and c != "??"]
+        
+        # Extraction des cartes du hero
+        hero = cards.get("hero", [])
+        if isinstance(hero, list):
+            hero = [c for c in hero if c and c != "??"]
+        else:
+            hero = []
+        
+        # Inférence de la street
+        street = infer_street(board)
+        
+        # Création du HandState
+        state = HandState(
+            street=street,
+            hero_cards=hero,
+            board=board,
+            pot=ocr_results.get("pot_combined"),
+            to_call=ocr_results.get("to_call"),
+            hero_stack=ocr_results.get("hero_stack"),
+            bb=bb_value,
+            hero_name=ocr_results.get("hero_name"),
+            history=ocr_results.get("history") or []
+        )
+        
+        return state
+        
+    except Exception as e:
+        print(f"⚠️ Erreur construction HandState: {e}")
+        return None
 
 # Win32
 try:
@@ -922,6 +981,23 @@ class LivePreview(tk.Tk):
         # Statut
         self.recognition_status_label = ttk.Label(recognition_frame, text="🔴 Désactivé", font=("Arial", 8))
         self.recognition_status_label.pack(anchor="w")
+        
+        # Labels de stratégie
+        if STRATEGY_AVAILABLE:
+            ttk.Separator(recognition_frame, orient="horizontal").pack(fill="x", pady=5)
+            ttk.Label(recognition_frame, text="🎯 STRATÉGIE", font=("Arial", 9, "bold")).pack(anchor="w")
+            
+            self.strategy_action_label = ttk.Label(recognition_frame, text="Action: --", font=("Arial", 8))
+            self.strategy_action_label.pack(anchor="w")
+            
+            self.strategy_size_label = ttk.Label(recognition_frame, text="Size: --", font=("Arial", 8))
+            self.strategy_size_label.pack(anchor="w")
+            
+            self.strategy_confidence_label = ttk.Label(recognition_frame, text="Confiance: --", font=("Arial", 8))
+            self.strategy_confidence_label.pack(anchor="w")
+            
+            self.strategy_reason_label = ttk.Label(recognition_frame, text="Raison: --", font=("Arial", 8))
+            self.strategy_reason_label.pack(anchor="w")
 
     def _toggle_recognition(self):
         """Active/désactive la reconnaissance."""
@@ -950,6 +1026,86 @@ class LivePreview(tk.Tk):
         self.board_cards_label.config(text=f"Board: {self.recognition_integration.get_board_cards_display()}")
         self.confidence_label.config(text=self.recognition_integration.get_confidence_display())
         self.recognition_status_label.config(text=self.recognition_integration.get_recognition_status())
+        
+        # Intégration de la stratégie si disponible
+        if STRATEGY_AVAILABLE:
+            self._update_strategy_display()
+
+    def _update_strategy_display(self):
+        """Met à jour l'affichage de la stratégie."""
+        if not hasattr(self, 'strategy_action_label'):
+            return
+        
+        try:
+            # Récupère les résultats de reconnaissance
+            if not self.recognition_integration:
+                return
+            
+            # Récupère les données OCR et de cartes
+            ocr_results = self.recognition_integration.get_ocr_results()
+            cards_results = self.recognition_integration.get_cards_results()
+            
+            if not ocr_results or not cards_results:
+                return
+            
+            # Valeur de la big blind (à récupérer depuis la config ou les données)
+            bb_value = 2.0  # Valeur par défaut, à améliorer
+            
+            # Construit l'état de jeu
+            state = build_state_from_outputs(ocr_results, cards_results, bb_value)
+            
+            if state is None:
+                # Affiche des valeurs par défaut
+                self.strategy_action_label.config(text="Action: --")
+                self.strategy_size_label.config(text="Size: --")
+                self.strategy_confidence_label.config(text="Confiance: --")
+                self.strategy_reason_label.config(text="Raison: --")
+                return
+            
+            # Demande une politique de jeu
+            policy = ask_policy(state)
+            
+            if not policy:
+                # Affiche des valeurs par défaut
+                self.strategy_action_label.config(text="Action: --")
+                self.strategy_size_label.config(text="Size: --")
+                self.strategy_confidence_label.config(text="Confiance: --")
+                self.strategy_reason_label.config(text="Raison: --")
+                return
+            
+            # Met à jour l'affichage
+            action = policy.get("action", "--")
+            size_bb = policy.get("size_bb")
+            confidence = policy.get("confidence", 0.0)
+            reason = policy.get("reason", "--")
+            
+            # Couleur basée sur l'action
+            action_color = {
+                "fold": "red",
+                "call": "orange", 
+                "raise": "green"
+            }.get(action, "black")
+            
+            self.strategy_action_label.config(text=f"Action: {action.upper()}", foreground=action_color)
+            
+            if size_bb is not None:
+                self.strategy_size_label.config(text=f"Size: {size_bb:.1f} BB")
+            else:
+                self.strategy_size_label.config(text="Size: --")
+            
+            # Couleur de confiance
+            conf_color = "green" if confidence >= 0.7 else "orange" if confidence >= 0.4 else "red"
+            self.strategy_confidence_label.config(text=f"Confiance: {confidence:.1%}", foreground=conf_color)
+            
+            self.strategy_reason_label.config(text=f"Raison: {reason}")
+            
+        except Exception as e:
+            print(f"⚠️ Erreur mise à jour stratégie: {e}")
+            # Affiche des valeurs par défaut en cas d'erreur
+            self.strategy_action_label.config(text="Action: --")
+            self.strategy_size_label.config(text="Size: --")
+            self.strategy_confidence_label.config(text="Confiance: --")
+            self.strategy_reason_label.config(text="Raison: --")
 
     def _get_next_template_number(self, directory: str, prefix: str) -> int:
         """Retourne le prochain numéro disponible pour les templates."""
