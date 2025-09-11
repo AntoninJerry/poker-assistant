@@ -42,6 +42,28 @@ except ImportError as e:
     print(f"⚠️ Overlay moderne non disponible: {e}")
     MODERN_OVERLAY_AVAILABLE = False
 
+# === Bus de snapshots (dernier paquet seulement) ==============================
+class SnapshotBus:
+    """Bus thread-safe qui conserve uniquement le dernier snapshot publié.
+
+    Fournit une lecture O(1) du paquet le plus récent pour éviter tout backlog
+    entre les producteurs (workers) et le consommateur (UI overlay).
+    """
+
+    def __init__(self):
+        self._snap: Optional[Dict] = None
+        self._ts: float = 0.0
+        self._lock = threading.Lock()
+
+    def publish(self, snap: Dict) -> None:
+        with self._lock:
+            self._snap = snap
+            self._ts = time.monotonic()
+
+    def get(self) -> (Optional[Dict], float):
+        with self._lock:
+            return self._snap, self._ts
+
 # === Sélection de fenêtre ======================================================
 def select_table_dialog(candidates: List) -> Optional:
     """
@@ -148,11 +170,9 @@ class HybridProvider:
         self._stop = False
         self._handle = handle
         self._use_real_recognition = False
-        # Mailbox thread-safe (dernier snapshot seulement)
-        from collections import deque
-        import threading as _thr
-        self._mailbox = deque(maxlen=1)
-        self._mb_lock = _thr.Lock()
+        # Bus de snapshots (dernier paquet seulement)
+        self._bus = SnapshotBus()
+        self._last_ts_published: float = 0.0
         # Cache policy non-bloquant
         self._last_policy: Dict = {}
         
@@ -226,6 +246,10 @@ class HybridProvider:
                     # Mode simulation uniquement
                     state = self._get_simulated_state(sim_counter)
 
+                # Publier un snapshot dès que l'état est prêt (avant policy)
+                self._last_state = state
+                self._publish_snapshot()
+
                 # Calcul policy côté worker (évite de bloquer l'UI)
                 policy: Dict = {}
                 try:
@@ -237,13 +261,8 @@ class HybridProvider:
                 # Mettre à jour le cache policy
                 self._last_policy = policy or {}
 
-                # Publier un snapshot thread-safe
-                with self._mb_lock:
-                    self._mailbox.clear()
-                    self._mailbox.append({"state": state, "policy": policy})
-
-                # Conserver dernier état pour compatibilité
-                self._last_state = state
+                # Publier à nouveau après calcul de policy
+                self._publish_snapshot()
                 
                 sim_counter += 1
                     
@@ -401,13 +420,15 @@ class HybridProvider:
             print(f"⚠️ Erreur construction état: {e}")
             return None
 
-    # --- API mailbox/non-bloquante
+    # --- Publication et lecture snapshots (non-bloquant)
+    def _publish_snapshot(self) -> None:
+        """Publie le dernier état/policy dans le bus (dernier paquet seulement)."""
+        snap = {"state": self._last_state, "policy": (self._last_policy or {})}
+        self._bus.publish(snap)
+
     def get_snapshot(self) -> Optional[Dict]:
-        try:
-            with self._mb_lock:
-                return self._mailbox[-1] if self._mailbox else None
-        except Exception:
-            return None
+        snap, _ts = self._bus.get()
+        return snap
 
     def get_cached_policy(self) -> Dict:
         """Retourne la dernière policy calculée par le worker (non-bloquant)."""
