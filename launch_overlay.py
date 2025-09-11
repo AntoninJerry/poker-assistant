@@ -74,14 +74,18 @@ def select_table_dialog(candidates: List) -> Optional:
 
     app = ctk.CTk()
     app.title("Sélection de la table")
-    app.geometry("500x400")
+    app.geometry("560x520")
+    try:
+        app.minsize(560, 520)
+    except Exception:
+        pass
     app.resizable(False, False)
     
     # Centrer la fenêtre
     app.update_idletasks()
-    x = (app.winfo_screenwidth() // 2) - (500 // 2)
-    y = (app.winfo_screenheight() // 2) - (400 // 2)
-    app.geometry(f"500x400+{x}+{y}")
+    x = (app.winfo_screenwidth() // 2) - (560 // 2)
+    y = (app.winfo_screenheight() // 2) - (520 // 2)
+    app.geometry(f"560x520+{x}+{y}")
     
     # Forcer la fenêtre au premier plan
     app.lift()
@@ -101,7 +105,7 @@ def select_table_dialog(candidates: List) -> Optional:
     list_frame.pack(padx=20, pady=10, fill="both", expand=True)
     
     # Liste des tables avec scrollbar
-    listbox = tk.Listbox(list_frame, width=70, height=10, bg='#2b2b2b', fg='white', 
+    listbox = tk.Listbox(list_frame, width=70, height=9, bg='#2b2b2b', fg='white', 
                         selectbackground='#0078d4', font=("Consolas", 11))
     scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
     listbox.configure(yscrollcommand=scrollbar.set)
@@ -140,7 +144,7 @@ def select_table_dialog(candidates: List) -> Optional:
 
     # Frame pour les boutons
     button_frame = ctk.CTkFrame(app, fg_color="transparent")
-    button_frame.pack(pady=30, padx=20)
+    button_frame.pack(side="bottom", pady=20, padx=20)
     
     # Boutons
     ok_button = ctk.CTkButton(button_frame, text="✅ Valider", command=_ok, width=140, height=40, font=("Inter", 14, "bold"))
@@ -153,6 +157,10 @@ def select_table_dialog(candidates: List) -> Optional:
     app.protocol("WM_DELETE_WINDOW", _cancel)
     
     print("🖥️ Affichage de la fenêtre de sélection...")
+    try:
+        app.update_idletasks()
+    except Exception:
+        pass
     app.mainloop()
     print("🖥️ Fenêtre de sélection fermée")
     
@@ -173,15 +181,23 @@ class HybridProvider:
         # Bus de snapshots (dernier paquet seulement)
         self._bus = SnapshotBus()
         self._last_ts_published: float = 0.0
+        # Exposé pour les lecteurs qui veulent éviter le re-render
+        self.last_snapshot_ts: float = 0.0
         # Cache policy non-bloquant
         self._last_policy: Dict = {}
+        # Buffers partiels + verrous
+        self._card_results: Dict = {}
+        self._text_results: Dict = {}
+        self._state_lock = threading.Lock()
+        self._running = True
         
         # Tentative d'initialisation des pipelines
         self._init_pipelines()
         
-        # Thread de reconnaissance
-        t = threading.Thread(target=self._worker, daemon=True)
-        t.start()
+        # Threads séparés (fréquences différentes)
+        threading.Thread(target=self._cards_worker, daemon=True).start()
+        threading.Thread(target=self._ocr_worker, daemon=True).start()
+        threading.Thread(target=self._policy_worker, daemon=True).start()
 
     def _init_pipelines(self):
         """Initialise les pipelines de reconnaissance."""
@@ -223,53 +239,92 @@ class HybridProvider:
             print(f"❌ Erreur initialisation pipelines: {e}")
             self._use_real_recognition = False
 
-    def _worker(self):
-        """Thread principal de reconnaissance."""
-        # Laisse le pipeline s'initialiser
-        time.sleep(2.0)
+    def _cards_worker(self):
+        """Traitement des cartes à ~14 FPS."""
+        time.sleep(1.0)
         self._ready = True
-        
-        print("🔄 Démarrage de la reconnaissance...")
-        
-        # Compteur pour les données simulées
         sim_counter = 0
-        
-        # Boucle de reconnaissance
-        while not self._stop:
+        while self._running and not self._stop:
             try:
-                if self._use_real_recognition:
-                    # Tentative de vraie reconnaissance
-                    state = self._try_real_recognition()
-                    if not state:
-                        state = self._get_simulated_state(sim_counter)
+                if self._use_real_recognition and self.card_pipeline:
+                    img = self.capture.capture_window(self._handle)
+                    if img is not None:
+                        try:
+                            rf = self.card_pipeline.recognize_cards(img)
+                            hero_cards = [c.rank + c.suit for c in rf.hero_cards if c.rank and c.suit]
+                            board_cards = [c.rank + c.suit for c in rf.board_cards if c.rank and c.suit]
+                            self._card_results = {"hero": hero_cards, "board": board_cards}
+                        except Exception as e:
+                            print(f"⚠️ Erreur cartes: {e}")
+                            self._card_results = {}
+                    else:
+                        self._card_results = {}
                 else:
-                    # Mode simulation uniquement
-                    state = self._get_simulated_state(sim_counter)
+                    # Simulation cartes uniquement
+                    state_sim = self._get_simulated_state(sim_counter)
+                    self._card_results = {"hero": state_sim.hero_cards, "board": state_sim.board}
+                    sim_counter += 1
 
-                # Publier un snapshot dès que l'état est prêt (avant policy)
-                self._last_state = state
+                # Reconstruire l'état avec dernières infos OCR
+                with self._state_lock:
+                    state = self._build_state(self._card_results, self._text_results)
+                    self._last_state = state
                 self._publish_snapshot()
-
-                # Calcul policy côté worker (évite de bloquer l'UI)
-                policy: Dict = {}
-                try:
-                    if STRATEGY_AVAILABLE and state is not None:
-                        policy = ask_policy(state) or {}
-                except Exception as _e:
-                    policy = {}
-
-                # Mettre à jour le cache policy
-                self._last_policy = policy or {}
-
-                # Publier à nouveau après calcul de policy
-                self._publish_snapshot()
-                
-                sim_counter += 1
-                    
             except Exception as e:
-                print(f"⚠️ Erreur dans _worker: {e}")
-                
-            time.sleep(0.5)  # 2 FPS - Plus réactif pour voir les cartes
+                print(f"⚠️ Erreur _cards_worker: {e}")
+            time.sleep(0.07)  # ~14 FPS
+
+    def _ocr_worker(self):
+        """Traitement OCR à ~5 FPS."""
+        time.sleep(1.2)
+        while self._running and not self._stop:
+            try:
+                if self._use_real_recognition and self.text_ocr:
+                    img = self.capture.capture_window(self._handle)
+                    if img is not None:
+                        try:
+                            self._text_results = self.text_ocr.recognize_text(img)
+                        except Exception as e:
+                            print(f"⚠️ Erreur OCR: {e}")
+                            self._text_results = {}
+                    else:
+                        self._text_results = {}
+                else:
+                    # Simulation montants de _get_simulated_state
+                    sim = self._get_simulated_state(int(time.time()) % 1000)
+                    self._text_results = {
+                        "pot_combined": type("X", (), {"is_valid": True, "normalized_value": sim.pot})(),
+                        "to_call": type("X", (), {"is_valid": True, "normalized_value": sim.to_call})(),
+                        "hero_stack": type("X", (), {"is_valid": True, "normalized_value": sim.hero_stack})(),
+                        "hero_name": type("X", (), {"is_valid": True, "text": sim.hero_name})(),
+                    }
+
+                with self._state_lock:
+                    state = self._build_state(self._card_results, self._text_results)
+                    self._last_state = state
+                self._publish_snapshot()
+            except Exception as e:
+                print(f"⚠️ Erreur _ocr_worker: {e}")
+            time.sleep(0.2)  # ~5 FPS
+
+    def _policy_worker(self):
+        """Requête policy à ~1 Hz maximum."""
+        last_query = 0.0
+        while self._running and not self._stop:
+            try:
+                now = time.monotonic()
+                if now - last_query >= 1.0:
+                    state = self._last_state
+                    if STRATEGY_AVAILABLE and state is not None:
+                        try:
+                            self._last_policy = ask_policy(state) or {}
+                            self._publish_snapshot()
+                        except Exception:
+                            self._last_policy = {}
+                    last_query = now
+            except Exception as e:
+                print(f"⚠️ Erreur _policy_worker: {e}")
+            time.sleep(0.1)
 
     def _try_real_recognition(self) -> Optional[HandState]:
         """Tente la vraie reconnaissance."""
@@ -425,10 +480,17 @@ class HybridProvider:
         """Publie le dernier état/policy dans le bus (dernier paquet seulement)."""
         snap = {"state": self._last_state, "policy": (self._last_policy or {})}
         self._bus.publish(snap)
+        # Mémorise le dernier ts pour consultation rapide
+        _snap, ts = self._bus.get()
+        self.last_snapshot_ts = ts
 
     def get_snapshot(self) -> Optional[Dict]:
         snap, _ts = self._bus.get()
         return snap
+
+    def get_snapshot_with_ts(self) -> (Optional[Dict], float):
+        """Retourne (snapshot, ts_monotonic)."""
+        return self._bus.get()
 
     def get_cached_policy(self) -> Dict:
         """Retourne la dernière policy calculée par le worker (non-bloquant)."""
@@ -447,6 +509,7 @@ class HybridProvider:
 
     def stop(self):
         self._stop = True
+        self._running = False
 
 # === Overlay HUD avec tkinter simple ==========================================
 class PokerHUD:
@@ -455,6 +518,8 @@ class PokerHUD:
     def __init__(self, provider: HybridProvider, title: str = "Poker HUD", alpha: float = 0.92):
         self.provider = provider
         self.title = title
+        # Eviter renders inutiles si pas de nouvel échantillon
+        self._last_seen_ts: float = 0.0
         
         # Création de la fenêtre
         self.root = tk.Tk()
@@ -545,8 +610,13 @@ class PokerHUD:
                 return
 
             snap = None
+            snap_ts: Optional[float] = None
+            # Tente d'obtenir (snap, ts) si exposé
             try:
-                snap = self.provider.get_snapshot()  # type: ignore[attr-defined]
+                if hasattr(self.provider, "get_snapshot_with_ts"):
+                    snap, snap_ts = self.provider.get_snapshot_with_ts()  # type: ignore[attr-defined]
+                else:
+                    snap = self.provider.get_snapshot()  # type: ignore[attr-defined]
             except Exception:
                 snap = None
 
@@ -559,6 +629,15 @@ class PokerHUD:
             if state is None:
                 self.root.after(300, self._poll_provider)
                 return
+
+            # Si timestamp identique au dernier vu, skip render
+            if snap_ts is None:
+                # Fallback: utilise l'attribut exposé si dispo
+                snap_ts = getattr(self.provider, "last_snapshot_ts", None)
+            if isinstance(snap_ts, float) and snap_ts == self._last_seen_ts:
+                return
+            if isinstance(snap_ts, float):
+                self._last_seen_ts = snap_ts
 
             self._render(state, policy)
         finally:

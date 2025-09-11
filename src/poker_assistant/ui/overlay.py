@@ -126,6 +126,27 @@ class PokerHUD(ctk.CTk):
         self._provider = provider
         self._click_through = False
         self._after_id = None
+        # Gestion sûre des jobs after()
+        self._jobs = set()
+        
+        def _schedule(delay_ms, fn):
+            jid = self.after(delay_ms, fn)
+            self._jobs.add(jid)
+            return jid
+        
+        def _cancel_all_jobs():
+            for jid in list(self._jobs):
+                try:
+                    self.after_cancel(jid)
+                except Exception:
+                    pass
+                finally:
+                    self._jobs.discard(jid)
+        
+        # expose helpers
+        self._schedule = _schedule
+        self._cancel_all_jobs = _cancel_all_jobs
+        self._last_seen_ts: float = 0.0
 
         # ---- Conteneur principal
         self._main_container = ctk.CTkFrame(self, corner_radius=16, border_width=1)
@@ -237,9 +258,13 @@ class PokerHUD(ctk.CTk):
 
             # 1) snapshot mailbox (non bloquant)
             snap = None
+            snap_ts = None
             if hasattr(self._provider, "get_snapshot"):
                 try:
-                    snap = self._provider.get_snapshot()
+                    if hasattr(self._provider, "get_snapshot_with_ts"):
+                        snap, snap_ts = self._provider.get_snapshot_with_ts()
+                    else:
+                        snap = self._provider.get_snapshot()
                 except Exception:
                     snap = None
 
@@ -251,13 +276,20 @@ class PokerHUD(ctk.CTk):
                 pol = self._provider.get_cached_policy() if hasattr(self._provider, "get_cached_policy") else {}
 
             if st is not None:
+                # Skip render si timestamp identique
+                if snap_ts is None:
+                    snap_ts = getattr(self._provider, "last_snapshot_ts", None)
+                if isinstance(snap_ts, float) and snap_ts == self._last_seen_ts:
+                    return
+                if isinstance(snap_ts, float):
+                    self._last_seen_ts = snap_ts
                 self._render(st, pol)
         except Exception as e:
             print(f"⚠️ Erreur polling HUD: {e}")
         finally:
             # ✅ un seul after planifié par tick
             try:
-                self._after_id = self.after(300, self._poll_provider)
+                self._after_id = self._schedule(120, self._poll_provider)
             except Exception:
                 pass
 
@@ -310,6 +342,8 @@ class PokerHUD(ctk.CTk):
         try:
             if self._after_id is not None:
                 self.after_cancel(self._after_id)
+            # Annule tous les jobs planifiés
+            self._cancel_all_jobs()
         except Exception:
             pass
         print("👋 Fermeture de l'overlay HUD")

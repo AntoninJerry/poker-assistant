@@ -13,6 +13,7 @@ from collections import deque
 import yaml
 from pathlib import Path
 from datetime import datetime
+import os
 
 @dataclass
 class TextResult:
@@ -50,12 +51,20 @@ class TextRecognitionPipeline:
         self.variation_threshold = 0.2  # Plus strict pour ignorer les sauts
         self.min_confidence = 0.1  # Seuil de confiance minimum (très tolérant pour debug)
         self.max_value_change = 0.3  # Changement maximum relatif autorisé (30%)
+        # Fast-path EMA: bypass si haute confiance ou grand saut absolu
+        self.fastpath_high_conf = 0.95
+        self.fastpath_big_jump = 10.0  # saut absolu pour bypass (ex: €)
         
         # Configuration du debug OCR
         self.debug_ocr = False  # Active l'export PNG des zones OCR
         self.debug_export_dir = Path("debug_ocr")
         self.debug_export_interval = 1.0  # Intervalle entre exports (secondes)
         self.last_debug_export = {}  # Timestamp du dernier export par zone
+        
+        # Détection de stabilité des ROI (diff-only)
+        self.roi_stability_threshold: float = 1.5
+        self._roi_hashes: Dict[str, float] = {}
+        self._last_results: Dict[str, TextResult] = {}
         
         # Métriques de performance
         self.performance_metrics = {
@@ -79,6 +88,17 @@ class TextRecognitionPipeline:
         if self.reader is not None:
             return
         try:
+            # Limite l'utilisation CPU de PyTorch/EasyOCR côté CPU
+            try:
+                import torch  # type: ignore
+                max_threads = max(1, min(4, os.cpu_count() or 1))
+                torch.set_num_threads(max_threads)
+                # Optionnel: réduire l'interop si besoin
+                if hasattr(torch, "set_num_interop_threads"):
+                    torch.set_num_interop_threads(max_threads)
+            except Exception:
+                pass
+
             import easyocr  # type: ignore
             # Langue minimale (chiffres/symboles), GPU off pour stabilité
             self.reader = easyocr.Reader(['en'], gpu=False)
@@ -569,6 +589,28 @@ class TextRecognitionPipeline:
         # Traite chaque zone
         for element_name, zone in text_zones.items():
             try:
+                # Calcul d'un hash léger pour éviter travail inutile si pas de changement
+                try:
+                    gray_small = cv2.cvtColor(zone, cv2.COLOR_BGR2GRAY) if len(zone.shape) == 3 else zone
+                    # Canny puis moyenne des intensités comme hash économique
+                    edge = cv2.Canny(gray_small, 50, 100)
+                    roi_hash = float(cv2.mean(edge)[0])
+                except Exception:
+                    roi_hash = None  # en cas d'échec, on traite normalement
+
+                if roi_hash is not None:
+                    prev_hash = self._roi_hashes.get(element_name)
+                    if prev_hash is not None and abs(roi_hash - prev_hash) < self.roi_stability_threshold:
+                        # ROI inchangée: réutilise le dernier résultat s'il existe
+                        cached = self._last_results.get(element_name)
+                        if cached is not None:
+                            results[element_name] = cached
+                            # Passer à la zone suivante sans refaire l'OCR
+                            continue
+                # Met à jour hash courant
+                if roi_hash is not None:
+                    self._roi_hashes[element_name] = roi_hash
+
                 # Preprocessing de la zone
                 processed_zone = self._preprocess_image(zone)
                 
@@ -654,23 +696,46 @@ class TextRecognitionPipeline:
                     normalized_value, original_text = self._normalize_money_value(combined_text)
                     print(f"  → Normalisation monétaire: '{combined_text}' → {normalized_value}")
                 
-                # Applique le filtre EMA pour les valeurs numériques
+                # Applique le filtre EMA pour les valeurs numériques (avec fast-path)
                 if normalized_value is not None and isinstance(normalized_value, (int, float)):
                     # Validation du changement de valeur
                     is_change_valid = self._is_value_change_valid(element_name, normalized_value)
                     print(f"  → Changement valide: {is_change_valid} (max_change={self.max_value_change})")
                     
-                    if is_change_valid:
-                        filtered_value = self._apply_ema_filter(element_name, normalized_value)
+                    ema_prev = self.ema_values.get(element_name)
+                    diff_abs = (abs(float(normalized_value) - float(ema_prev))
+                                if isinstance(ema_prev, (int, float)) else float('inf'))
+
+                    use_fastpath = (avg_confidence >= self.fastpath_high_conf) or (
+                        isinstance(ema_prev, (int, float)) and diff_abs >= self.fastpath_big_jump
+                    )
+
+                    if use_fastpath:
+                        # UI voit la valeur immédiate pour supprimer la latence perçue
+                        display_value = float(normalized_value)
+                        # EMA rattrape ensuite (mise à jour lissée)
+                        if ema_prev is None:
+                            self.ema_values[element_name] = float(normalized_value)
+                        else:
+                            self.ema_values[element_name] = (
+                                self.ema_alpha * float(normalized_value)
+                                + (1 - self.ema_alpha) * float(ema_prev)
+                            )
+                        self.stable_values[element_name] = self.ema_values[element_name]
+                        self.last_update_times[element_name] = time.time()
+                        filtered_value = display_value
+                        print(f"  → Fast-path EMA: conf={avg_confidence:.3f}, diff_abs={diff_abs:.2f} -> display immédiat {display_value}")
                     else:
-                        # Accepte quand même (le lissage fera le travail ensuite)
-                        filtered_value = normalized_value
-                        print(f"  → Valeur rejetée par EMA, mais on accepte quand même: {filtered_value}")
-                    
-                    # S'assure que filtered_value n'est jamais None
-                    if filtered_value is None:
-                        filtered_value = normalized_value
-                        print(f"  → filtered_value était None, utilise normalized_value: {filtered_value}")
+                        if is_change_valid:
+                            filtered_value = self._apply_ema_filter(element_name, float(normalized_value))
+                        else:
+                            # Accepte quand même (le lissage fera le travail ensuite)
+                            filtered_value = float(normalized_value)
+                            print(f"  → Valeur rejetée par EMA, mais on accepte quand même: {filtered_value}")
+                        # S'assure que filtered_value n'est jamais None
+                        if filtered_value is None:
+                            filtered_value = float(normalized_value)
+                            print(f"  → filtered_value était None, utilise normalized_value: {filtered_value}")
                 else:
                     filtered_value = normalized_value
                 
@@ -684,13 +749,15 @@ class TextRecognitionPipeline:
                 
                 print(f"  → Validation: conf={avg_confidence:.3f} (min={self.min_confidence}), val={normalized_value}, valid={is_valid}")
                 
-                results[element_name] = TextResult(
+                current_result = TextResult(
                     text=combined_text,
                     confidence=avg_confidence,
                     normalized_value=filtered_value,
                     is_valid=is_valid,
                     raw_ocr_text=original_text
                 )
+                results[element_name] = current_result
+                self._last_results[element_name] = current_result
                 
                 # Export debug avec le texte reconnu
                 if self.debug_ocr:
